@@ -15,10 +15,15 @@ defmodule MlDHT do
 
   ## Constants
 
-  @node_id     Utils.gen_node_id()
-  @node_id_enc Base.encode16(@node_id)
+  @node_id Utils.gen_node_id()
+  @node_id_enc Utils.encode_human(@node_id)
 
   ## Types
+
+  @typedoc """
+  A binary which contains the cluster
+  """
+  @type cluster :: binary
 
   @typedoc """
   A binary which contains the infohash of a torrent. An infohash is a SHA1
@@ -46,13 +51,40 @@ defmodule MlDHT do
     MlDHT.Registry.start()
 
     ## Generate a new node ID
-    Logger.debug "Node-ID: #{@node_id_enc}"
+    Logger.debug("Node-ID: #{@node_id_enc}")
 
     ## Start the main supervisor
     MlDHT.Supervisor.start_link(
       node_id: @node_id,
-      name:    MlDHT.Registry.via(@node_id_enc, MlDHT.Supervisor)
+      name: MlDHT.Registry.via(@node_id_enc, MlDHT.Supervisor)
     )
+  end
+
+  def generate_store_keypair() do
+    {:ok, rsa_priv_key} = ExPublicKey.generate_key()
+    {:ok, rsa_pub_key} = ExPublicKey.public_key_from_private_key(rsa_priv_key)
+    {rsa_priv_key, rsa_pub_key}
+  end
+
+  def store(cluster, value, ttl) do
+    pid = @node_id_enc |> MlDHT.Registry.get_pid(MlDHT.Server.Worker)
+    key = Utils.hash(value)
+    MlDHT.Server.Worker.store(pid, cluster, key, value, ttl)
+  end
+
+  def find_value(cluster, infohash, callback) do
+    pid = @node_id_enc |> MlDHT.Registry.get_pid(MlDHT.Server.Worker)
+    MlDHT.Server.Worker.find_value(pid, cluster, infohash, callback)
+  end
+
+  def store_name(cluster, rsa_priv_key, value, ttl) do
+    pid = @node_id_enc |> MlDHT.Registry.get_pid(MlDHT.Server.Worker)
+    MlDHT.Server.Worker.store_name(pid, cluster, rsa_priv_key, value, ttl)
+  end
+
+  def find_name(cluster, infohash, generation, callback) do
+    pid = @node_id_enc |> MlDHT.Registry.get_pid(MlDHT.Server.Worker)
+    MlDHT.Server.Worker.find_name(pid, cluster, infohash, generation, callback)
   end
 
   @doc ~S"""
@@ -81,10 +113,10 @@ defmodule MlDHT do
              IO.puts "ip: #{inspect ip} port: #{port}"
            end)
   """
-  @spec search(infohash, fun) :: atom
-  def search(infohash, callback) do
+  @spec search(cluster, infohash, fun) :: atom
+  def search(cluster, infohash, callback) do
     pid = @node_id_enc |> MlDHT.Registry.get_pid(MlDHT.Server.Worker)
-    MlDHT.Server.Worker.search(pid, infohash, callback)
+    MlDHT.Server.Worker.search(pid, cluster, infohash, callback)
   end
 
   @doc ~S"""
@@ -101,10 +133,10 @@ defmodule MlDHT do
              IO.puts "ip: #{inspect ip} port: #{port}"
            end)
   """
-  @spec search_announce(infohash, fun) :: atom
-  def search_announce(infohash, callback) do
+  @spec search_announce(cluster, infohash, fun) :: atom
+  def search_announce(cluster, infohash, callback) do
     pid = @node_id_enc |> MlDHT.Registry.get_pid(MlDHT.Server.Worker)
-    MlDHT.Server.Worker.search_announce(pid, infohash, callback)
+    MlDHT.Server.Worker.search_announce(pid, cluster, infohash, callback)
   end
 
   @doc ~S"""
@@ -120,10 +152,9 @@ defmodule MlDHT do
              IO.puts "ip: #{inspect ip} port: #{port}"
            end, 6881)
   """
-  @spec search_announce(infohash, fun, tcp_port) :: atom
-  def search_announce(infohash, callback, port) do
+  @spec search_announce(cluster, infohash, fun, tcp_port) :: atom
+  def search_announce(cluster, infohash, callback, port) do
     pid = @node_id_enc |> MlDHT.Registry.get_pid(MlDHT.Server.Worker)
-    MlDHT.Server.Worker.search_announce(pid, infohash, callback, port)
+    MlDHT.Server.Worker.search_announce(pid, cluster, infohash, callback, port)
   end
-
 end

@@ -1,4 +1,4 @@
-defmodule MlDHT.Search.Worker do
+defmodule MlDHT.SearchValue.Worker do
   @moduledoc false
 
   @typedoc """
@@ -7,9 +7,9 @@ defmodule MlDHT.Search.Worker do
   @type transaction_id :: <<_::16>>
 
   @typedoc """
-  A DHT search is divided in a :get_peers or a :find_node search.
+  A DHT search is divided in a :find_value search.
   """
-  @type search_type :: :get_peers | :find_node
+  @type search_type :: :find_value
 
   use GenServer, restart: :temporary
 
@@ -38,9 +38,7 @@ defmodule MlDHT.Search.Worker do
     GenServer.start_link(__MODULE__, args, name: opts[:name])
   end
 
-  def get_peers(pid, cluster, args), do: GenServer.cast(pid, {:get_peers, cluster, args})
-
-  def find_node(pid, cluster, args), do: GenServer.cast(pid, {:find_node, cluster, args})
+  def find_value(pid, cluster, args), do: GenServer.cast(pid, {:find_value, cluster, args})
 
   @doc """
   Stops a search process.
@@ -56,9 +54,13 @@ defmodule MlDHT.Search.Worker do
 
   def tid(pid), do: GenServer.call(pid, :tid)
 
-  #  @spec handle_reply(pid, foo, list) :: :ok
-  def handle_reply(pid, remote, nodes) do
-    GenServer.cast(pid, {:handle_reply, remote, nodes})
+  #  @spec handle_reply(pid, foo, binary, binary) :: :ok
+  def handle_reply(pid, remote, key, value) do
+    GenServer.cast(pid, {:handle_reply, remote, key, value})
+  end
+
+  def handle_nodes_reply(pid, remote, nodes) do
+    GenServer.cast(pid, {:handle_nodes_reply, remote, nodes})
   end
 
   ####################
@@ -76,23 +78,20 @@ defmodule MlDHT.Search.Worker do
        :type => type,
        :tid => tid,
        :name => id,
-       :cluster_config => cluster_config
+       :cluster_config => cluster_config,
+       :completed => false
      }}
   end
 
+  def wind_down(state) do
+    MlDHT.Registry.unregister(state.name)
+    {:stop, :normal, state}
+  end
+
   def handle_info({:search_iterate, {cluster_header, cluster_secret} = cluster_info}, state) do
-    if search_completed?(state.nodes, state.target) do
-      Logger.debug("Search is complete")
-
-      ## If the search is complete and it was get_peers search, then we will
-      ## send the clostest peers an announce_peer message.
-      if Map.has_key?(state, :announce) and state.announce == true do
-        send_announce_msg(cluster_header, cluster_secret, state)
-      end
-
-      MlDHT.Registry.unregister(state.name)
-
-      {:stop, :normal, state}
+    if state.completed or search_completed?(state.nodes, state.target) do
+      Logger.debug("SearchValue is complete")
+      wind_down(state)
     else
       ## Send queries to the 3 closest nodes
       new_state =
@@ -132,42 +131,30 @@ defmodule MlDHT.Search.Worker do
     {:reply, state.tid, state}
   end
 
-  def handle_cast({:get_peers, cluster, args}, state) do
+  def handle_cast({:find_value, cluster, args}, state) do
     case get_cluster_info(cluster, state) do
       nil ->
-        Logger.error("get_peers cluster not configured: #{cluster}")
+        Logger.error("find_value cluster not configured: #{cluster}")
         {:noreply, state}
 
       cluster_info ->
-        new_state = start_search(:get_peers, args, cluster_info, state)
+        new_state = start_search(:find_value, args, cluster_info, state)
         {:noreply, new_state}
     end
   end
 
-  def handle_cast({:find_node, cluster, args}, state) do
-    case get_cluster_info(cluster, state) do
-      nil ->
-        Logger.error("find_node cluster not configured: #{cluster}")
-        {:noreply, state}
-
-      cluster_info ->
-        new_state = start_search(:find_node, args, cluster_info, state)
-
-        {:noreply, new_state}
-    end
-  end
-
-  def handle_cast({:handle_reply, remote, nil}, state) do
+  def handle_cast({:handle_reply, remote, key, value}, state) do
     old_nodes = update_responded_node(state.nodes, remote)
 
-    ## If the reply contains values we need to inform the user of this
-    ## information and call the callback function.
-    if remote.values, do: Enum.each(remote.values, state.callback)
-
-    {:noreply, %{state | nodes: old_nodes}}
+    if key == state.target and key == Utils.hash(value) do
+      state.callback.(remote, value)
+      wind_down(%{state | completed: true, nodes: old_nodes})
+    else
+      {:noreply, %{state | nodes: old_nodes}}
+    end
   end
 
-  def handle_cast({:handle_reply, remote, nodes}, state) do
+  def handle_cast({:handle_nodes_reply, remote, nodes}, state) do
     old_nodes = update_responded_node(state.nodes, remote)
 
     new_nodes =
@@ -204,7 +191,7 @@ defmodule MlDHT.Search.Worker do
   end
 
   ## This function merges args (keyword list) with the state map and returns a
-  ## function depending on the type (:get_peers, :find_node).
+  ## function depending on the type (:find_value).
   defp start_search(type, args, cluster_info, state) do
     send(self(), {:search_iterate, cluster_info})
 
@@ -234,21 +221,16 @@ defmodule MlDHT.Search.Worker do
     send_queries(rest, cluster_info, %{state | nodes: new_nodes})
   end
 
-  def nodes_to_search_nodes(nodes) do
+  defp nodes_to_search_nodes(nodes) do
     Enum.map(nodes, fn node ->
       {id, ip, port} = extract_node_infos(node)
       %Node{id: id, ip: ip, port: port}
     end)
   end
 
-  defp gen_request_msg(:find_node, state) do
-    args = [tid: state.tid, node_id: state.node_id, target: state.target]
-    KRPCProtocol.encode(:find_node, args)
-  end
-
-  defp gen_request_msg(:get_peers, state) do
-    args = [tid: state.tid, node_id: state.node_id, info_hash: state.target]
-    KRPCProtocol.encode(:get_peers, args)
+  defp gen_request_msg(:find_value, state) do
+    args = [tid: state.tid, node_id: state.node_id, key: state.target]
+    KRPCProtocol.encode(:find_value, args)
   end
 
   ## It is necessary that we need to know which node in our node list has
