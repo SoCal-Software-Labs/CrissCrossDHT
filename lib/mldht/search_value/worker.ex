@@ -29,10 +29,11 @@ defmodule MlDHT.SearchValue.Worker do
     args = [
       opts[:socket],
       opts[:node_id],
+      opts[:ip_tuple],
       opts[:type],
       opts[:tid],
       opts[:name],
-      Utils.config(:clusters)
+      opts[:clusters]
     ]
 
     GenServer.start_link(__MODULE__, args, name: opts[:name])
@@ -67,7 +68,7 @@ defmodule MlDHT.SearchValue.Worker do
   # Server Callbacks #
   ####################
 
-  def init([socket, node_id, type, tid, name, cluster_config]) do
+  def init([socket, node_id, ip_tuple, type, tid, name, cluster_config]) do
     ## Extract the id from the via string
     {_, _, {_, id}} = name
 
@@ -75,6 +76,7 @@ defmodule MlDHT.SearchValue.Worker do
      %{
        :socket => socket,
        :node_id => node_id,
+       :ip_tuple => ip_tuple,
        :type => type,
        :tid => tid,
        :name => id,
@@ -91,6 +93,11 @@ defmodule MlDHT.SearchValue.Worker do
   def handle_info({:search_iterate, {cluster_header, cluster_secret} = cluster_info}, state) do
     if state.completed or search_completed?(state.nodes, state.target) do
       Logger.debug("SearchValue is complete")
+
+      if not state.completed do
+        state.callback.(nil, :not_found)
+      end
+
       wind_down(state)
     else
       ## Send queries to the 3 closest nodes
@@ -134,7 +141,7 @@ defmodule MlDHT.SearchValue.Worker do
   def handle_cast({:find_value, cluster, args}, state) do
     case get_cluster_info(cluster, state) do
       nil ->
-        Logger.error("find_value cluster not configured: #{cluster}")
+        Logger.error("find_value cluster not configured: #{Utils.encode_human(cluster)}")
         {:noreply, state}
 
       cluster_info ->
@@ -161,13 +168,20 @@ defmodule MlDHT.SearchValue.Worker do
       Enum.map(nodes, fn node ->
         {id, ip, port} = node
 
-        unless Enum.find(state.nodes, fn x -> x.id == id end) do
+        unless Enum.find(state.nodes, fn x -> x.id == id or {ip, port} == state.ip_tuple end) do
           %Node{id: id, ip: ip, port: port}
         end
       end)
       |> Enum.filter(fn x -> x != nil end)
 
-    {:noreply, %{state | nodes: old_nodes ++ new_nodes}}
+    new_state = %{state | nodes: old_nodes ++ new_nodes}
+
+    if search_completed?(new_state.nodes, new_state.target) do
+      state.callback.(nil, :not_found)
+      wind_down(new_state)
+    else
+      {:noreply, new_state}
+    end
   end
 
   #####################

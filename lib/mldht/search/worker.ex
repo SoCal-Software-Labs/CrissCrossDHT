@@ -32,7 +32,7 @@ defmodule MlDHT.Search.Worker do
       opts[:type],
       opts[:tid],
       opts[:name],
-      Utils.config(:clusters)
+      opts[:clusters]
     ]
 
     GenServer.start_link(__MODULE__, args, name: opts[:name])
@@ -135,7 +135,7 @@ defmodule MlDHT.Search.Worker do
   def handle_cast({:get_peers, cluster, args}, state) do
     case get_cluster_info(cluster, state) do
       nil ->
-        Logger.error("get_peers cluster not configured: #{cluster}")
+        Logger.error("get_peers cluster not configured: #{Utils.encode_human(cluster)}")
         {:noreply, state}
 
       cluster_info ->
@@ -147,7 +147,7 @@ defmodule MlDHT.Search.Worker do
   def handle_cast({:find_node, cluster, args}, state) do
     case get_cluster_info(cluster, state) do
       nil ->
-        Logger.error("find_node cluster not configured: #{cluster}")
+        Logger.error("find_node cluster not configured: #{Utils.encode_human(cluster)}")
         {:noreply, state}
 
       cluster_info ->

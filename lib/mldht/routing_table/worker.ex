@@ -44,6 +44,7 @@ defmodule MlDHT.RoutingTable.Worker do
 
     init_args = [
       node_id: opts[:node_id],
+      ip_tuple: opts[:ip_tuple],
       cluster: opts[:cluster],
       cluster_secret: opts[:cluster_secret],
       rt_name: opts[:rt_name]
@@ -94,7 +95,13 @@ defmodule MlDHT.RoutingTable.Worker do
   # GenServer API #
   #################
 
-  def init(node_id: node_id, cluster: cluster, cluster_secret: cluster_secret, rt_name: rt_name) do
+  def init(
+        node_id: node_id,
+        ip_tuple: ip_tuple,
+        cluster: cluster,
+        cluster_secret: cluster_secret,
+        rt_name: rt_name
+      ) do
     ## Start timer for peer review
     Process.send_after(self(), :review, @review_time)
 
@@ -115,7 +122,8 @@ defmodule MlDHT.RoutingTable.Worker do
        buckets: [Bucket.new(0)],
        cache: :ets.new(ets_name, [:set, :protected]),
        cluster: cluster,
-       cluster_secret: cluster_secret
+       cluster_secret: cluster_secret,
+       ip_tuple: ip_tuple
      }}
   end
 
@@ -277,7 +285,7 @@ defmodule MlDHT.RoutingTable.Worker do
   def handle_cast({:add, node_id, address, socket}, state) do
     cond do
       # This is our own node id
-      node_id == state.node_id ->
+      node_id == state.node_id or address == state.ip_tuple ->
         {:noreply, state}
 
       # We have this node already in our table
@@ -334,7 +342,9 @@ defmodule MlDHT.RoutingTable.Worker do
         ## Start find_node search
         state.node_id_enc
         |> MlDHT.Registry.get_pid(MlDHT.Search.Supervisor)
-        |> MlDHT.Search.Supervisor.start_child(:find_node, socket, state.node_id)
+        |> MlDHT.Search.Supervisor.start_child(:find_node, socket, state.node_id, %{
+          state.cluster => state.cluster_secret
+        })
         |> Search.find_node(state.cluster, target: target, start_nodes: [node])
 
       nil ->

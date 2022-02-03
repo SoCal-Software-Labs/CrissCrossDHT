@@ -10,12 +10,13 @@ defmodule MlDHT.Registry do
 
   def start, do: Registry.start_link(keys: :unique, name: @name)
 
+  def register(name), do: Registry.register(@name, name, [])
   def unregister(name), do: Registry.unregister(@name, name)
 
   def lookup(name), do: Registry.lookup(@name, name)
 
   def via(name), do: {:via, Registry, {@name, name}}
-  def via(node_id_enc, module), do: id(node_id_enc, module) |> via() |> IO.inspect()
+  def via(node_id_enc, module), do: id(node_id_enc, module) |> via()
   def via(node_id_enc, module, id), do: id(node_id_enc, module, id) |> via()
 
   def get_pid(name) do
@@ -46,15 +47,15 @@ defmodule MlDHT.Registry do
   def get_pids(node_id_enc, module), do: id(node_id_enc, module) |> get_pids()
   def get_pids(node_id_enc, module, id), do: id(node_id_enc, module, id) |> get_pids()
 
-  defp id(node_id_enc, module) do
+  def id(node_id_enc, module) do
     node_id_enc <> "_" <> Atom.to_string(module)
   end
 
-  defp id(node_id_enc, module, id) when is_atom(id) do
+  def id(node_id_enc, module, id) when is_atom(id) do
     id(node_id_enc, module, to_string(id))
   end
 
-  defp id(node_id_enc, module, id) do
+  def id(node_id_enc, module, id) do
     id(node_id_enc, module) <> "_" <> id
   end
 end

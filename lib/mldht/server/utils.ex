@@ -52,32 +52,96 @@ defmodule MlDHT.Server.Utils do
   """
   def gen_secret, do: gen_node_id()
 
-  def config(:clusters) do
-    Application.get_env(:mldht, :clusters, %{})
-    |> Enum.map(fn {k, {c, pub, priv}} ->
-      {:ok, pub_key} = ExPublicKey.loads(pub)
-      {:ok, priv_key} = ExPublicKey.loads(priv)
-      {k, {c, pub_key, priv_key}}
+  def config(config, :bootstrap_nodes) do
+    Map.get(config, :bootstrap_nodes, [])
+    |> Enum.map(fn node ->
+      host =
+        case node do
+          %{host: host} when is_binary(host) ->
+            host
+
+          _ ->
+            raise "Bootstrap configured without host"
+        end
+
+      port =
+        case node do
+          %{port: port} when is_number(port) ->
+            port
+
+          _ ->
+            raise "Bootstrap configured without port"
+        end
+
+      node_id =
+        case node do
+          %{node_id: node_id} when is_binary(node_id) ->
+            decode_human!(node_id)
+
+          _ ->
+            raise "Bootstrap configured without node_id"
+        end
+
+      {node_id, host, port}
+    end)
+  end
+
+  def config(config, :clusters) do
+    Map.get(config, :clusters, %{})
+    |> Enum.map(fn {k, config} ->
+      pub_key =
+        case config do
+          %{public_key: pub} when not is_nil(pub) ->
+            {:ok, pub_key} = ExPublicKey.loads(pub)
+            pub_key
+
+          _ ->
+            nil
+        end
+
+      priv_key =
+        case config do
+          %{private_key: priv} when not is_nil(priv) ->
+            {:ok, priv_key} = ExPublicKey.loads(priv)
+            priv_key
+
+          _ ->
+            nil
+        end
+
+      cypher =
+        case config do
+          %{secret: secret} when not is_nil(secret) ->
+            decode_human!(secret)
+
+          _ ->
+            raise "Cluster #{k} configured without secret"
+        end
+
+      {decode_human!(k), %{cypher: cypher, public_key: pub_key, private_key: priv_key}}
     end)
     |> Enum.into(%{})
   end
 
-  def config(value, ret \\ nil), do: Application.get_env(:mldht, value, ret)
+  def config(config, value, ret \\ nil), do: Map.get(config, value, ret)
 
-  def encrypt({secret, _, _}, payload) do
+  def encrypt(%{cypher: secret}, payload) do
     do_encrypt(payload, secret)
   end
 
-  def decrypt(payload, {secret, _, _}) do
+  def decrypt(payload, %{cypher: secret}) do
     do_decrypt(payload, secret)
   end
 
-  def verify_signature({_, nil, _}, value, signature), do: false
+  def verify_signature(%{public_key: nil}, value, signature), do: false
 
-  def verify_signature({_, rsa_pub_key, _}, msg, signature) do
+  def verify_signature(%{public_key: rsa_pub_key}, msg, signature) do
     case ExPublicKey.verify(msg, signature, rsa_pub_key) do
-      {:ok, true} -> true
-      _ -> false
+      {:ok, true} ->
+        true
+
+      e ->
+        false
     end
   end
 
@@ -108,13 +172,23 @@ defmodule MlDHT.Server.Utils do
   end
 
   def encode_human(bin) do
-    Base.url_encode64(bin, padding: false)
+    Base58.encode(bin)
+  end
+
+  def decode_human!(bin) do
+    Base58.decode(bin)
   end
 
   def combine_to_sign(list) do
     list
     |> Enum.map(&to_string(&1))
     |> Enum.join(".")
+  end
+
+  def name_from_private_rsa_key(rsa_priv_key) do
+    {:ok, rsa_pub_key} = ExPublicKey.public_key_from_private_key(rsa_priv_key)
+    {:ok, encoded} = ExPublicKey.pem_encode(rsa_pub_key)
+    hash(hash(encoded))
   end
 
   def check_generation(storage_pid, name, generation) do

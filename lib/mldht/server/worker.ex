@@ -20,7 +20,9 @@ defmodule MlDHT.Server.Worker do
   @time_cluster_secret 60 * 1000 * 5
 
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts[:node_id], opts)
+    GenServer.start_link(__MODULE__, [node_id: opts[:node_id], config: opts[:config]],
+      name: opts[:name]
+    )
   end
 
   @doc """
@@ -63,18 +65,69 @@ defmodule MlDHT.Server.Worker do
     GenServer.cast(pid, {:find_value, cluster, key, callback})
   end
 
+  def find_value_sync(pid, cluster, key, timeout \\ 10_000) do
+    ref = make_ref()
+    outer = self()
+
+    callback = fn
+      remote, value ->
+        send(outer, {ref, remote, value})
+    end
+
+    GenServer.cast(pid, {:find_value, cluster, key, callback})
+
+    receive do
+      {^ref, remote, value} ->
+        {remote, value}
+    after
+      timeout ->
+        {:error, :timeout}
+    end
+  end
+
   def find_name(pid, cluster, name, generation, callback) do
     GenServer.cast(pid, {:find_name, cluster, name, generation, callback})
   end
 
-  def store(pid, cluster, key, value, ttl) do
-    tid = KRPCProtocol.gen_tid()
-    :ok = GenServer.cast(pid, {:store, cluster, key, value, ttl, tid})
-    tid
+  def find_name_sync(pid, cluster, name, generation, timeout \\ 10_000) do
+    ref = make_ref()
+    outer = self()
+
+    callback = fn remote, name ->
+      send(outer, {ref, remote, name})
+    end
+
+    GenServer.cast(
+      pid,
+      {:find_name, cluster, name, generation, callback}
+    )
+
+    receive do
+      {^ref, remote, name} -> {remote, name}
+    after
+      timeout ->
+        {:error, :timeout}
+    end
   end
 
-  def store_name(pid, cluster, private_rsa_key, value, ttl) do
+  def store(pid, cluster, value, ttl) do
     tid = KRPCProtocol.gen_tid()
+
+    store(pid, cluster, value, ttl, tid)
+  end
+
+  def store(pid, cluster, value, ttl, tid) do
+    key = Utils.hash(value)
+    :ok = GenServer.cast(pid, {:store, cluster, key, value, ttl, tid})
+    {key, tid}
+  end
+
+  def store_name(pid, cluster, private_rsa_key, value, local, remote, ttl) do
+    tid = KRPCProtocol.gen_tid()
+    store_name(pid, cluster, private_rsa_key, value, local, remote, ttl, tid)
+  end
+
+  def store_name(pid, cluster, private_rsa_key, value, local, remote, ttl, tid) do
     {:ok, public_key} = ExPublicKey.public_key_from_private_key(private_rsa_key)
     {:ok, pem_string} = ExPublicKey.pem_encode(public_key)
     public_key_hash = Utils.hash(pem_string)
@@ -83,15 +136,52 @@ defmodule MlDHT.Server.Worker do
     :ok =
       GenServer.cast(
         pid,
-        {:store_name, cluster, private_rsa_key, public_key_hash, name, value, ttl, tid}
+        {:store_name, cluster, private_rsa_key, public_key_hash, name, value, local, remote, ttl,
+         tid}
       )
 
     {name, tid}
   end
 
-  def create_udp_socket(port, ip_vers) do
+  def get_public_key(cache, pid, storage_pid, cluster, key_hash) do
+    # TODO add cache
+    case :ets.lookup(cache, key_hash) do
+      [{_, key}] ->
+        {:ok, key}
+
+      _ ->
+        key_file =
+          case Storage.get_value(storage_pid, key_hash) do
+            nil ->
+              server_pid = pid
+              task = Task.async(fn -> find_value_sync(server_pid, cluster, key_hash) end)
+              Task.await(task)
+
+            key ->
+              key
+          end
+
+        case key_file do
+          s when is_binary(s) ->
+            case ExPublicKey.loads(s) do
+              {:ok, key} ->
+                :ets.insert(cache, {key_hash, key})
+                {:ok, key}
+
+              e ->
+                e
+            end
+
+          _ ->
+            {:error, "public key not found"}
+        end
+    end
+  end
+
+  def create_udp_socket(config, port, ip_vers) do
     ip_addr = ip_vers |> to_string() |> Kernel.<>("_addr") |> String.to_atom()
-    options = ip_vers |> inet_option() |> maybe_put(:ip, Utils.config(ip_addr))
+    bind_ip = Utils.config(config, ip_addr, {127, 0, 0, 1})
+    options = ip_vers |> inet_option() |> maybe_put(:ip, bind_ip)
 
     case :gen_udp.open(port, options ++ [{:active, true}]) do
       {:ok, socket} ->
@@ -100,31 +190,36 @@ defmodule MlDHT.Server.Worker do
         foo = :inet.getopts(socket, [:ipv6_v6only])
         Logger.debug("Options: #{inspect(foo)}")
 
-        socket
+        {socket, bind_ip}
 
       {:error, reason} ->
         {:stop, reason}
     end
   end
 
-  def init(node_id) do
+  def init(node_id: node_id, config: config) do
     ## Returns false in case the option is not set in the environment (setting
     ## the option to false or not setting the option at all has the same effect
     ## in this case)
-    cfg_ipv6_is_enabled? = Utils.config(:ipv6, false)
-    cfg_ipv4_is_enabled? = Utils.config(:ipv4, false)
+    cfg_ipv6_is_enabled? = Utils.config(config, :ipv6, false)
+    cfg_ipv4_is_enabled? = Utils.config(config, :ipv4, false)
 
     unless cfg_ipv4_is_enabled? or cfg_ipv6_is_enabled? do
       raise "Configuration failure: Either ipv4 or ipv6 has to be set to true."
     end
 
-    cfg_cluster = Utils.config(:clusters)
-    cfg_port = Utils.config(:port)
-    socket = if cfg_ipv4_is_enabled?, do: create_udp_socket(cfg_port, :ipv4), else: nil
-    socket6 = if cfg_ipv6_is_enabled?, do: create_udp_socket(cfg_port, :ipv6), else: nil
+    cfg_cluster = Utils.config(config, :clusters)
+    cfg_port = Utils.config(config, :port)
+
+    {socket, socket_ip} =
+      if cfg_ipv4_is_enabled?, do: create_udp_socket(config, cfg_port, :ipv4), else: {nil, nil}
+
+    {socket6, socket6_ip} =
+      if cfg_ipv6_is_enabled?, do: create_udp_socket(config, cfg_port, :ipv6), else: {nil, nil}
 
     ## Change secret of the token every 5 minutes
     Process.send_after(self(), :cluster_secret, @time_cluster_secret)
+    cache = :ets.new(:key_cache, [:set, :public])
 
     state = %{
       node_id: node_id,
@@ -133,16 +228,20 @@ defmodule MlDHT.Server.Worker do
       socket6: socket6,
       old_secret: nil,
       secret: Utils.gen_secret(),
-      cluster_config: cfg_cluster
+      cluster_config: cfg_cluster,
+      config: config,
+      self_pid: self(),
+      cache: cache,
+      ip_tuple: {socket_ip, cfg_port}
     }
 
     # INFO Setup routingtable for IPv4
     if cfg_ipv4_is_enabled? do
       for {cluster_header, cluster_secret} <- state.cluster_config do
-        start_rtable(node_id, cluster_header, cluster_secret, :ipv4)
+        start_rtable(node_id, cluster_header, cluster_secret, :ipv4, {socket_ip, cfg_port})
       end
 
-      if Utils.config(:bootstrap_nodes) do
+      if Utils.config(config, :bootstrap_nodes) do
         bootstrap(state, {socket, :inet})
       end
     end
@@ -150,10 +249,10 @@ defmodule MlDHT.Server.Worker do
     # INFO Setup routingtable for IPv6
     if cfg_ipv6_is_enabled? do
       for {cluster_header, cluster_secret} <- state.cluster_config do
-        start_rtable(node_id, cluster_header, cluster_secret, :ipv6)
+        start_rtable(node_id, cluster_header, cluster_secret, :ipv6, {socket6_ip, cfg_port})
       end
 
-      if Utils.config(:bootstrap_nodes) do
+      if Utils.config(config, :bootstrap_nodes) do
         bootstrap(state, {socket6, :inet6})
       end
     end
@@ -161,7 +260,7 @@ defmodule MlDHT.Server.Worker do
     {:ok, state}
   end
 
-  defp start_rtable(node_id, header, cluster_secret, rt_ident) do
+  defp start_rtable(node_id, header, cluster_secret, rt_ident, ip_tuple) do
     node_id_enc = node_id |> Utils.encode_human()
     rt_name = Utils.encode_human(header) <> to_string(rt_ident)
 
@@ -172,6 +271,7 @@ defmodule MlDHT.Server.Worker do
       |> DynamicSupervisor.start_child({
         MlDHT.RoutingTable.Supervisor,
         node_id: node_id,
+        ip_tuple: ip_tuple,
         node_id_enc: node_id_enc,
         cluster: header,
         cluster_secret: cluster_secret,
@@ -196,10 +296,11 @@ defmodule MlDHT.Server.Worker do
 
   def handle_cast({:store, cluster_header, key, value, ttl, tid}, state) do
     # TODO What about ipv6?
-    Logger.debug("[*] >> store")
+    Logger.debug("[*] >> store #{Utils.encode_human(tid)}")
 
     case state.cluster_config do
-      %{^cluster_header => {_, _, rsa_priv_key} = cluster_secret} when not is_nil(rsa_priv_key) ->
+      %{^cluster_header => %{private_key: rsa_priv_key} = cluster_secret}
+      when not is_nil(rsa_priv_key) ->
         nodes =
           state.node_id
           |> get_rtable(cluster_header, :ipv4)
@@ -231,19 +332,16 @@ defmodule MlDHT.Server.Worker do
   end
 
   def handle_cast(
-        {:store_name, cluster_header, rsa_priv_name_key, public_key_hash, name, value, ttl, tid},
+        {:store_name, cluster_header, rsa_priv_name_key, public_key_hash, name, value, local,
+         remote, ttl, tid},
         state
       ) do
     # TODO What about ipv6?
     Logger.debug("[*] >> store_name")
 
     case state.cluster_config do
-      %{^cluster_header => {_, _, rsa_priv_key} = cluster_secret} when not is_nil(rsa_priv_key) ->
-        nodes =
-          state.node_id
-          |> get_rtable(cluster_header, :ipv4)
-          |> MlDHT.RoutingTable.Worker.closest_nodes(name)
-
+      %{^cluster_header => %{private_key: rsa_priv_key} = cluster_secret}
+      when not is_nil(rsa_priv_key) ->
         storage_pid = state.node_id |> Utils.encode_human() |> Registry.get_pid(Storage)
 
         {:ok, signature} = Utils.sign(value, rsa_priv_key)
@@ -251,10 +349,10 @@ defmodule MlDHT.Server.Worker do
         {generation, to_sign} =
           case Storage.get_name(storage_pid, name) do
             nil ->
-              {0, Utils.combine_to_sign([0, "", signature])}
+              {0, Utils.combine_to_sign([0, signature])}
 
             {value, generation, _signature} ->
-              {generation + 1, Utils.combine_to_sign([generation + 1, value, signature])}
+              {generation + 1, Utils.combine_to_sign([generation + 1, signature])}
           end
 
         {:ok, signature_ns} = Utils.sign(to_sign, rsa_priv_name_key)
@@ -271,11 +369,29 @@ defmodule MlDHT.Server.Worker do
           signature_ns: signature_ns
         ]
 
-        payload = KRPCProtocol.encode(:store_name, args)
-        payload = Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+        if local do
+          Storage.put_name(
+            storage_pid,
+            name,
+            value,
+            generation,
+            signature_ns,
+            ttl
+          )
+        end
 
-        for node <- MlDHT.Search.Worker.nodes_to_search_nodes(nodes) do
-          :gen_udp.send(state.socket, node.ip, node.port, payload)
+        if remote do
+          payload = KRPCProtocol.encode(:store_name, args)
+          payload = Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+
+          nodes =
+            state.node_id
+            |> get_rtable(cluster_header, :ipv4)
+            |> MlDHT.RoutingTable.Worker.closest_nodes(name)
+
+          for node <- MlDHT.Search.Worker.nodes_to_search_nodes(nodes) do
+            :gen_udp.send(state.socket, node.ip, node.port, payload)
+          end
         end
 
       _ ->
@@ -294,7 +410,12 @@ defmodule MlDHT.Server.Worker do
 
     state.node_id_enc
     |> MlDHT.Registry.get_pid(MlDHT.SearchName.Supervisor)
-    |> MlDHT.SearchName.Supervisor.start_child(:find_name, state.socket, state.node_id)
+    |> MlDHT.SearchName.Supervisor.start_child(
+      :find_name,
+      state.socket,
+      state.node_id,
+      state.cluster_config
+    )
     |> MlDHT.SearchName.Worker.find_name(
       cluster,
       target: infohash,
@@ -315,7 +436,13 @@ defmodule MlDHT.Server.Worker do
 
     state.node_id_enc
     |> MlDHT.Registry.get_pid(MlDHT.SearchValue.Supervisor)
-    |> MlDHT.SearchValue.Supervisor.start_child(:find_value, state.socket, state.node_id)
+    |> MlDHT.SearchValue.Supervisor.start_child(
+      :find_value,
+      state.socket,
+      state.node_id,
+      state.ip_tuple,
+      state.cluster_config
+    )
     |> MlDHT.SearchValue.Worker.find_value(
       cluster,
       target: infohash,
@@ -335,7 +462,12 @@ defmodule MlDHT.Server.Worker do
 
     state.node_id_enc
     |> MlDHT.Registry.get_pid(MlDHT.Search.Supervisor)
-    |> MlDHT.Search.Supervisor.start_child(:get_peers, state.socket, state.node_id)
+    |> MlDHT.Search.Supervisor.start_child(
+      :get_peers,
+      state.socket,
+      state.node_id,
+      state.cluster_config
+    )
     |> Search.get_peers(
       cluster,
       target: infohash,
@@ -356,7 +488,12 @@ defmodule MlDHT.Server.Worker do
 
     state.node_id_enc
     |> MlDHT.Registry.get_pid(MlDHT.Search.Supervisor)
-    |> MlDHT.Search.Supervisor.start_child(:get_peers, state.socket, state.node_id)
+    |> MlDHT.Search.Supervisor.start_child(
+      :get_peers,
+      state.socket,
+      state.node_id,
+      state.cluster_config
+    )
     |> Search.get_peers(
       cluster,
       target: infohash,
@@ -377,7 +514,12 @@ defmodule MlDHT.Server.Worker do
 
     state.node_id_enc
     |> MlDHT.Registry.get_pid(MlDHT.Search.Supervisor)
-    |> MlDHT.Search.Supervisor.start_child(:get_peers, state.socket, state.node_id)
+    |> MlDHT.Search.Supervisor.start_child(
+      :get_peers,
+      state.socket,
+      state.node_id,
+      state.cluster_config
+    )
     |> Search.get_peers(
       cluster,
       target: infohash,
@@ -398,36 +540,40 @@ defmodule MlDHT.Server.Worker do
   end
 
   def handle_info({:udp, socket, ip, port, raw_data}, state) do
-    {cluster_header, body} =
-      raw_data
-      |> :binary.list_to_bin()
-      |> Utils.unwrap()
+    Task.start(fn ->
+      {cluster_header, body} =
+        raw_data
+        |> :binary.list_to_bin()
+        |> Utils.unwrap()
 
-    case state.cluster_config do
-      %{^cluster_header => cluster_secret} ->
-        decrypted = Utils.decrypt(body, cluster_secret)
+      case state.cluster_config do
+        %{^cluster_header => cluster_secret} ->
+          decrypted = Utils.decrypt(body, cluster_secret)
 
-        case decrypted do
-          c when is_binary(c) ->
-            c
-            |> String.trim_trailing("\n")
-            |> KRPCProtocol.decode()
-            |> handle_message(
-              {socket, get_ip_vers(socket)},
-              {cluster_header, cluster_secret},
-              ip,
-              port,
-              state
-            )
+          case decrypted do
+            c when is_binary(c) ->
+              c
+              |> String.trim_trailing("\n")
+              |> KRPCProtocol.decode()
+              |> handle_message(
+                {socket, get_ip_vers(socket)},
+                {cluster_header, cluster_secret},
+                ip,
+                port,
+                state
+              )
 
-          e ->
-            Logger.error("Error decrypting: #{inspect(e)}")
-            {:noreply, state}
-        end
+            e ->
+              Logger.error("Error decrypting: #{inspect(e)}")
+              {:noreply, state}
+          end
 
-      _ ->
-        {:noreply, state}
-    end
+        _ ->
+          {:noreply, state}
+      end
+    end)
+
+    {:noreply, state}
   end
 
   #########
@@ -501,23 +647,24 @@ defmodule MlDHT.Server.Worker do
         end
       end)
 
-    if nodes != [] do
-      Logger.debug("[#{Utils.encode_human(remote.node_id)}] << find_node_reply")
+    # if nodes != [] do
+    Logger.debug("[#{Utils.encode_human(remote.node_id)}] << find_node_reply")
 
-      nodes_args = if ip_vers == :ipv4, do: [nodes: nodes], else: [nodes6: nodes]
-      args = [node_id: state.node_id] ++ nodes_args ++ [tid: remote.tid]
-      Logger.debug("NODES ARGS: #{inspect(args)}")
-      payload = KRPCProtocol.encode(:find_node_reply, args)
+    nodes_args = if ip_vers == :ipv4, do: [nodes: nodes], else: [nodes6: nodes]
+    args = [node_id: state.node_id] ++ nodes_args ++ [tid: remote.tid]
+    Logger.debug("NODES ARGS: #{inspect(args)}")
+    payload = KRPCProtocol.encode(:find_node_reply, args)
 
-      # Logger.debug(PrettyHex.pretty_hex(to_string(payload)))
+    # Logger.debug(PrettyHex.pretty_hex(to_string(payload)))
 
-      :gen_udp.send(
-        socket,
-        ip,
-        port,
-        Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
-      )
-    end
+    :gen_udp.send(
+      socket,
+      ip,
+      port,
+      Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+    )
+
+    # end
 
     {:noreply, state}
   end
@@ -771,19 +918,28 @@ defmodule MlDHT.Server.Worker do
 
     hash_matches =
       Utils.hash(remote.public_key) == remote.name and
-        Utils.check_generation(storage_pid, remote.name, remote.generation)
+        Utils.check_generation(storage_pid, remote.name, remote.generation) and
+        case get_public_key(
+               state.cache,
+               state.self_pid,
+               storage_pid,
+               cluster_header,
+               remote.public_key
+             ) do
+          {:ok, public_key} ->
+            Utils.verify_signature(
+              %{public_key: public_key},
+              Utils.combine_to_sign([remote.generation, remote.signature]),
+              remote.signature_ns
+            )
 
-    # case KeyStorage.public_key(remote.public_key) do
-    #   {:ok, public_key} ->
-    #     Utils.verify_signature({nil, public_key, nil}, remote.value, remote.signature_ns)
+          _ ->
+            Logger.debug(
+              "Could not found NameService public key, #{Utils.encode_human(remote.public_key)}"
+            )
 
-    #   _ ->
-    #     Logger.debug(
-    #       "Could not found NameService public key, #{Utils.encode_human(remote.public_key)}"
-    #     )
-
-    #     false
-    # end
+            false
+        end
 
     payload =
       if hash_matches and valid_signature do
@@ -927,16 +1083,16 @@ defmodule MlDHT.Server.Worker do
       {socket, ip_vers}
     )
 
-    tid_enc = Utils.encode_human(remote.tid)
-
-    case MlDHT.Registry.get_pids(state.node_id_enc, Store, tid_enc) do
+    case MlDHT.Registry.lookup(remote.tid) do
       [] ->
+        tid_enc = Utils.encode_human(remote.tid)
+
         Logger.debug(
           "[#{Utils.encode_human(remote.node_id)}] no pids to send name tid: #{tid_enc} "
         )
 
       pids ->
-        for pid <- pids do
+        for {pid, _} <- pids do
           send(pid, {:store_name_reply, remote.node_id, remote.tid, remote.name})
         end
     end
@@ -962,16 +1118,16 @@ defmodule MlDHT.Server.Worker do
       {socket, ip_vers}
     )
 
-    tid_enc = Utils.encode_human(remote.tid)
-
-    case MlDHT.Registry.get_pids(state.node_id_enc, Store, tid_enc) do
+    case MlDHT.Registry.lookup(remote.tid) do
       [] ->
+        tid_enc = Utils.encode_human(remote.tid)
+
         Logger.debug(
           "[#{Utils.encode_human(remote.node_id)}] no pids to send value tid: #{tid_enc} "
         )
 
       pids ->
-        for pid <- pids do
+        for {pid, _} <- pids do
           send(pid, {:store_reply, remote.node_id, remote.tid, remote.key})
         end
     end
@@ -1097,7 +1253,7 @@ defmodule MlDHT.Server.Worker do
         Logger.debug("[#{Utils.encode_human(remote.node_id)}] ignore unknown tid: #{tid_enc} ")
 
       pid ->
-        Search.handle_nodes_reply(pid, remote, remote.nodes)
+        SearchValue.handle_nodes_reply(pid, remote, remote.nodes)
     end
 
     {:noreply, state}
@@ -1169,7 +1325,7 @@ defmodule MlDHT.Server.Worker do
   defp bootstrap(state, {socket, inet}) do
     ## Get the nodes which are defined as bootstrapping nodes in the config
     nodes =
-      Utils.config(:bootstrap_nodes)
+      Utils.config(state.config, :bootstrap_nodes)
       |> resolve_hostnames(inet)
 
     Logger.debug("nodes: #{inspect(nodes)}")
@@ -1178,7 +1334,12 @@ defmodule MlDHT.Server.Worker do
       ## Start a find_node search to collect neighbors for our routing table
       state.node_id_enc
       |> MlDHT.Registry.get_pid(MlDHT.Search.Supervisor)
-      |> MlDHT.Search.Supervisor.start_child(:find_node, socket, state.node_id)
+      |> MlDHT.Search.Supervisor.start_child(
+        :find_node,
+        socket,
+        state.node_id,
+        state.cluster_config
+      )
       |> Search.find_node(cluster_header, target: state.node_id, start_nodes: nodes)
     end
   end

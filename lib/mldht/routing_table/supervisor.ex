@@ -18,6 +18,7 @@ defmodule MlDHT.RoutingTable.Supervisor do
   @impl true
   def init(args) do
     node_id = args[:node_id]
+    ip_tuple = args[:ip_tuple]
     node_id_enc = args[:node_id_enc]
     rt_name = args[:rt_name]
     cluster = args[:cluster]
@@ -29,6 +30,7 @@ defmodule MlDHT.RoutingTable.Supervisor do
        node_id: node_id,
        cluster: cluster,
        cluster_secret: cluster_secret,
+       ip_tuple: ip_tuple,
        name: MlDHT.Registry.via(node_id_enc, MlDHT.RoutingTable.Worker, rt_name)},
       {DynamicSupervisor,
        name: MlDHT.Registry.via(node_id_enc, MlDHT.RoutingTable.NodeSupervisor, rt_name),
