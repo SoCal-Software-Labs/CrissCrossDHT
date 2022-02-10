@@ -1,9 +1,9 @@
-defmodule MlDHT.Server.Storage do
+defmodule CrissCrossDHT.Server.Storage do
   @moduledoc false
 
   use GenServer
 
-  alias MlDHT.Server.Utils
+  alias CrissCrossDHT.Server.Utils
   require Logger
 
   #############
@@ -28,36 +28,36 @@ defmodule MlDHT.Server.Storage do
     {:ok, %{nodes: %{}, values: %{}, names: %{}}}
   end
 
-  def put(pid, infohash, ip, port) do
-    GenServer.cast(pid, {:put, infohash, ip, port})
+  def put(pid, cluster, infohash, ip, port) do
+    GenServer.cast(pid, {:put, cluster, infohash, ip, port})
   end
 
-  def put_value(pid, key, value, ttl) do
-    GenServer.cast(pid, {:put_value, key, value, ttl})
+  def put_value(pid, cluster, key, value, ttl) do
+    GenServer.cast(pid, {:put_value, cluster, key, value, ttl})
   end
 
-  def put_name(pid, name, value, generation, signature, ttl) do
-    GenServer.cast(pid, {:put_name, name, value, generation, signature, ttl})
+  def put_name(pid, cluster, name, value, generation, signature, ttl) do
+    GenServer.cast(pid, {:put_name, cluster, name, value, generation, signature, ttl})
   end
 
   def print(pid) do
     GenServer.cast(pid, :print)
   end
 
-  def has_nodes_for_infohash?(pid, infohash) do
-    GenServer.call(pid, {:has_nodes_for_infohash?, infohash})
+  def has_nodes_for_infohash?(pid, cluster, infohash) do
+    GenServer.call(pid, {:has_nodes_for_infohash?, cluster, infohash})
   end
 
-  def get_nodes(pid, infohash) do
-    GenServer.call(pid, {:get_nodes, infohash})
+  def get_nodes(pid, cluster, infohash) do
+    GenServer.call(pid, {:get_nodes, cluster, infohash})
   end
 
-  def get_value(pid, infohash) do
-    GenServer.call(pid, {:get_value, infohash})
+  def get_value(pid, cluster, infohash) do
+    GenServer.call(pid, {:get_value, cluster, infohash})
   end
 
-  def get_name(pid, infohash) do
-    GenServer.call(pid, {:get_name, infohash})
+  def get_name(pid, cluster, infohash) do
+    GenServer.call(pid, {:get_name, cluster, infohash})
   end
 
   def handle_info(:review_storage, %{nodes: nodes, values: values} = state) do
@@ -69,24 +69,24 @@ defmodule MlDHT.Server.Storage do
     {:noreply, %{state | nodes: review(Map.keys(nodes), nodes), values: review_values(values)}}
   end
 
-  def handle_call({:has_nodes_for_infohash?, infohash}, _from, %{nodes: nodes} = state) do
-    has_keys = Map.has_key?(nodes, infohash)
-    result = if has_keys, do: Map.get(nodes, infohash) != [], else: has_keys
+  def handle_call({:has_nodes_for_infohash?, cluster, infohash}, _from, %{nodes: nodes} = state) do
+    has_keys = Map.has_key?(nodes, {cluster, infohash})
+    result = if has_keys, do: Map.get(nodes, {cluster, infohash}) != [], else: has_keys
 
     {:reply, result, state}
   end
 
-  def handle_call({:get_nodes, infohash}, _from, %{nodes: nodes} = state) do
+  def handle_call({:get_nodes, cluster, infohash}, _from, %{nodes: nodes} = state) do
     response =
       nodes
-      |> Map.get(infohash)
+      |> Map.get({cluster, infohash})
       |> Enum.map(fn x -> Tuple.delete_at(x, 2) end)
       |> Enum.slice(0..99)
 
     {:reply, response, state}
   end
 
-  def handle_call({:get_value, infohash}, _from, %{values: values} = state) do
+  def handle_call({:get_value, _cluster, infohash}, _from, %{values: values} = state) do
     maybe = Map.get(values, infohash)
 
     time = :os.system_time(:millisecond)
@@ -100,8 +100,8 @@ defmodule MlDHT.Server.Storage do
     {:reply, response, state}
   end
 
-  def handle_call({:get_name, infohash}, _from, %{names: names} = state) do
-    maybe = Map.get(names, infohash)
+  def handle_call({:get_name, cluster, infohash}, _from, %{names: names} = state) do
+    maybe = Map.get(names, {cluster, infohash})
 
     time = :os.system_time(:millisecond)
 
@@ -114,7 +114,10 @@ defmodule MlDHT.Server.Storage do
     {:reply, response, state}
   end
 
-  def handle_cast({:put_name, name, value, generation, signature, ttl}, %{names: names} = state) do
+  def handle_cast(
+        {:put_name, cluster, name, value, generation, signature, ttl},
+        %{names: names} = state
+      ) do
     item =
       if ttl == -1 do
         {value, generation, signature, -1}
@@ -122,12 +125,12 @@ defmodule MlDHT.Server.Storage do
         {value, generation, signature, :os.system_time(:millisecond) + ttl}
       end
 
-    new_values = Map.put(names, name, item)
+    new_values = Map.put(names, {cluster, name}, item)
 
     {:noreply, %{state | names: new_values}}
   end
 
-  def handle_cast({:put_value, key, value, ttl}, %{values: values} = state) do
+  def handle_cast({:put_value, _cluster, key, value, ttl}, %{values: values} = state) do
     item =
       if ttl == -1 do
         {value, -1}
@@ -140,29 +143,29 @@ defmodule MlDHT.Server.Storage do
     {:noreply, %{state | values: new_values}}
   end
 
-  def handle_cast({:put, infohash, ip, port}, %{nodes: nodes} = state) do
+  def handle_cast({:put, cluster, infohash, ip, port}, %{nodes: nodes} = state) do
     item = {ip, port, :os.system_time(:millisecond)}
 
     new_nodes =
-      if Map.has_key?(nodes, infohash) do
+      if Map.has_key?(nodes, {cluster, infohash}) do
         index =
           nodes
-          |> Map.get(infohash)
+          |> Map.get({cluster, infohash})
           |> Enum.find_index(fn node_tuple ->
             Tuple.delete_at(node_tuple, 2) == {ip, port}
           end)
 
         if index do
-          Map.update!(nodes, infohash, fn x ->
+          Map.update!(nodes, {cluster, infohash}, fn x ->
             List.replace_at(x, index, item)
           end)
         else
-          Map.update!(nodes, infohash, fn x ->
+          Map.update!(nodes, {cluster, infohash}, fn x ->
             x ++ [item]
           end)
         end
       else
-        Map.put(nodes, infohash, [item])
+        Map.put(nodes, {cluster, infohash}, [item])
       end
 
     {:noreply, %{state | nodes: new_nodes}}

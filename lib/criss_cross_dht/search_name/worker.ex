@@ -1,4 +1,4 @@
-defmodule MlDHT.SearchValue.Worker do
+defmodule CrissCrossDHT.SearchName.Worker do
   @moduledoc false
 
   @typedoc """
@@ -7,18 +7,18 @@ defmodule MlDHT.SearchValue.Worker do
   @type transaction_id :: <<_::16>>
 
   @typedoc """
-  A DHT search is divided in a :find_value search.
+  A DHT search is divided in a :find_name search.
   """
-  @type search_type :: :find_value
+  @type search_type :: :find_name
 
   use GenServer, restart: :temporary
 
   require Logger
 
-  alias MlDHT.RoutingTable.Distance
-  alias MlDHT.Search.Node
-  alias MlDHT.Server.Worker
-  alias MlDHT.Server.Utils
+  alias CrissCrossDHT.RoutingTable.Distance
+  alias CrissCrossDHT.Search.Node
+  alias CrissCrossDHT.Server.Worker
+  alias CrissCrossDHT.Server.Utils
 
   ##############
   # Client API #
@@ -39,7 +39,7 @@ defmodule MlDHT.SearchValue.Worker do
     GenServer.start_link(__MODULE__, args, name: opts[:name])
   end
 
-  def find_value(pid, cluster, args), do: GenServer.cast(pid, {:find_value, cluster, args})
+  def find_name(pid, cluster, args), do: GenServer.cast(pid, {:find_name, cluster, args})
 
   @doc """
   Stops a search process.
@@ -56,8 +56,8 @@ defmodule MlDHT.SearchValue.Worker do
   def tid(pid), do: GenServer.call(pid, :tid)
 
   #  @spec handle_reply(pid, foo, binary, binary) :: :ok
-  def handle_reply(pid, remote, key, value) do
-    GenServer.cast(pid, {:handle_reply, remote, key, value})
+  def handle_reply(pid, remote, key, value, generation) do
+    GenServer.cast(pid, {:handle_reply, remote, key, value, generation})
   end
 
   def handle_nodes_reply(pid, remote, nodes) do
@@ -86,13 +86,13 @@ defmodule MlDHT.SearchValue.Worker do
   end
 
   def wind_down(state) do
-    MlDHT.Registry.unregister(state.name)
+    CrissCrossDHT.Registry.unregister(state.name)
     {:stop, :normal, state}
   end
 
   def handle_info({:search_iterate, {cluster_header, cluster_secret} = cluster_info}, state) do
     if state.completed or search_completed?(state.nodes, state.target) do
-      Logger.debug("SearchValue is complete")
+      Logger.debug("SearchName is complete")
 
       if not state.completed do
         state.callback.(nil, :not_found)
@@ -125,7 +125,7 @@ defmodule MlDHT.SearchValue.Worker do
   end
 
   def handle_call(:stop, _from, state) do
-    MlDHT.Registry.unregister(state.name)
+    CrissCrossDHT.Registry.unregister(state.name)
 
     {:stop, :normal, :ok, state}
   end
@@ -138,22 +138,23 @@ defmodule MlDHT.SearchValue.Worker do
     {:reply, state.tid, state}
   end
 
-  def handle_cast({:find_value, cluster, args}, state) do
+  def handle_cast({:find_name, cluster, args}, state) do
     case get_cluster_info(cluster, state) do
       nil ->
-        Logger.error("find_value cluster not configured: #{Utils.encode_human(cluster)}")
+        Logger.error("find_name cluster not configured: #{Utils.encode_human(cluster)}")
         {:noreply, state}
 
       cluster_info ->
-        new_state = start_search(:find_value, args, cluster_info, state)
+        new_state = start_search(:find_name, args, cluster_info, state)
         {:noreply, new_state}
     end
   end
 
-  def handle_cast({:handle_reply, remote, key, value}, state) do
+  def handle_cast({:handle_reply, remote, key, value, generation}, state) do
     old_nodes = update_responded_node(state.nodes, remote)
 
-    if key == state.target and key == Utils.hash(value) do
+    # TODO: Verify value with public key
+    if key == state.target do
       state.callback.(remote, value)
       wind_down(%{state | completed: true, nodes: old_nodes})
     else
@@ -174,14 +175,7 @@ defmodule MlDHT.SearchValue.Worker do
       end)
       |> Enum.filter(fn x -> x != nil end)
 
-    new_state = %{state | nodes: old_nodes ++ new_nodes}
-
-    if search_completed?(new_state.nodes, new_state.target) do
-      state.callback.(nil, :not_found)
-      wind_down(new_state)
-    else
-      {:noreply, new_state}
-    end
+    {:noreply, %{state | nodes: old_nodes ++ new_nodes}}
   end
 
   #####################
@@ -205,7 +199,7 @@ defmodule MlDHT.SearchValue.Worker do
   end
 
   ## This function merges args (keyword list) with the state map and returns a
-  ## function depending on the type (:find_value).
+  ## function depending on the type (:find_name).
   defp start_search(type, args, cluster_info, state) do
     send(self(), {:search_iterate, cluster_info})
 
@@ -242,9 +236,15 @@ defmodule MlDHT.SearchValue.Worker do
     end)
   end
 
-  defp gen_request_msg(:find_value, state) do
-    args = [tid: state.tid, node_id: state.node_id, key: state.target]
-    KRPCProtocol.encode(:find_value, args)
+  defp gen_request_msg(:find_name, state) do
+    args = [
+      tid: state.tid,
+      node_id: state.node_id,
+      name: state.target,
+      generation: state.generation
+    ]
+
+    KRPCProtocol.encode(:find_name, args)
   end
 
   ## It is necessary that we need to know which node in our node list has
@@ -279,7 +279,7 @@ defmodule MlDHT.SearchValue.Worker do
   defp extract_node_infos(node) when is_tuple(node), do: node
 
   defp extract_node_infos(node) when is_pid(node) do
-    MlDHT.RoutingTable.Node.to_tuple(node)
+    CrissCrossDHT.RoutingTable.Node.to_tuple(node)
   end
 
   ## This function contains the condition when a search is completed.

@@ -1,18 +1,18 @@
-defmodule MlDHT.Server.Worker do
+defmodule CrissCrossDHT.Server.Worker do
   @moduledoc false
 
   use GenServer
 
   require Logger
 
-  alias MlDHT.Server.Utils
-  alias MlDHT.Server.Storage
-  alias MlDHT.Registry
+  alias CrissCrossDHT.Server.Utils
+  alias CrissCrossDHT.Server.Storage
+  alias CrissCrossDHT.Registry
 
-  alias MlDHT.RoutingTable.Node
-  alias MlDHT.Search.Worker, as: Search
-  alias MlDHT.SearchValue.Worker, as: SearchValue
-  alias MlDHT.SearchName.Worker, as: SearchName
+  alias CrissCrossDHT.RoutingTable.Node
+  alias CrissCrossDHT.Search.Worker, as: Search
+  alias CrissCrossDHT.SearchValue.Worker, as: SearchValue
+  alias CrissCrossDHT.SearchName.Worker, as: SearchName
 
   @type ip_vers :: :ipv4 | :ipv6
 
@@ -31,7 +31,7 @@ defmodule MlDHT.Server.Worker do
   nodes that are close to us and save it to our own routing table.
 
   ## Example
-  iex> MlDHT.DHTServer.Worker.bootstrap
+  iex> CrissCrossDHT.DHTServer.Worker.bootstrap
   """
   def bootstrap(pid) do
     GenServer.cast(pid, :bootstrap)
@@ -44,7 +44,7 @@ defmodule MlDHT.Server.Worker do
 
   ## Example
   iex> infohash = "3F19..." |> Base.decode16!
-  iex> MlDHT.DHTServer.search(infohash, fn(node) ->
+  iex> CrissCrossDHT.DHTServer.search(infohash, fn(node) ->
   {ip, port} = node
   IO.puts "ip: #{ip} port: #{port}"
   end)
@@ -53,12 +53,20 @@ defmodule MlDHT.Server.Worker do
     GenServer.cast(pid, {:search, cluster, infohash, callback})
   end
 
-  def search_announce(pid, cluster, infohash, callback) do
-    GenServer.cast(pid, {:search_announce, cluster, infohash, callback})
+  def search_announce(pid, cluster, infohash, ttl, callback) do
+    GenServer.cast(pid, {:search_announce, cluster, infohash, callback, ttl})
   end
 
-  def search_announce(pid, cluster, infohash, port, callback) do
-    GenServer.cast(pid, {:search_announce, cluster, infohash, port, callback})
+  def search_announce(pid, cluster, infohash, port, ttl, callback) do
+    GenServer.cast(pid, {:search_announce, cluster, infohash, callback, ttl, port})
+  end
+
+  def cluster_announce(pid, cluster, infohash, ttl) do
+    GenServer.cast(pid, {:cluster_announce, cluster, infohash, ttl})
+  end
+
+  def has_announced_cluster(pid, cluster, infohash) do
+    GenServer.call(pid, {:has_announced_cluster, cluster, infohash})
   end
 
   def find_value(pid, cluster, key, callback) do
@@ -136,14 +144,14 @@ defmodule MlDHT.Server.Worker do
     :ok =
       GenServer.cast(
         pid,
-        {:store_name, cluster, private_rsa_key, public_key_hash, name, value, local, remote, ttl,
-         tid}
+        {:store_name, cluster, private_rsa_key, pem_string, public_key_hash, name, value, local,
+         remote, ttl, tid}
       )
 
     {name, tid}
   end
 
-  def get_public_key(cache, pid, storage_pid, cluster, key_hash) do
+  def get_public_key(cache, pid, storage_pid, cluster, key_hash, state) do
     # TODO add cache
     case :ets.lookup(cache, key_hash) do
       [{_, key}] ->
@@ -151,7 +159,7 @@ defmodule MlDHT.Server.Worker do
 
       _ ->
         key_file =
-          case Storage.get_value(storage_pid, key_hash) do
+          case state.storage_mod.get_value(storage_pid, cluster, key_hash) do
             nil ->
               server_pid = pid
               task = Task.async(fn -> find_value_sync(server_pid, cluster, key_hash) end)
@@ -210,6 +218,7 @@ defmodule MlDHT.Server.Worker do
 
     cfg_cluster = Utils.config(config, :clusters)
     cfg_port = Utils.config(config, :port)
+    {storage_mod, _} = Utils.config(config, :storage)
 
     {socket, socket_ip} =
       if cfg_ipv4_is_enabled?, do: create_udp_socket(config, cfg_port, :ipv4), else: {nil, nil}
@@ -220,6 +229,7 @@ defmodule MlDHT.Server.Worker do
     ## Change secret of the token every 5 minutes
     Process.send_after(self(), :cluster_secret, @time_cluster_secret)
     cache = :ets.new(:key_cache, [:set, :public])
+    storage_pid = node_id |> Utils.encode_human() |> Registry.get_pid(Storage)
 
     state = %{
       node_id: node_id,
@@ -232,7 +242,9 @@ defmodule MlDHT.Server.Worker do
       config: config,
       self_pid: self(),
       cache: cache,
-      ip_tuple: {socket_ip, cfg_port}
+      ip_tuple: {socket_ip, cfg_port},
+      storage_mod: storage_mod,
+      storage_pid: storage_pid
     }
 
     # INFO Setup routingtable for IPv4
@@ -267,9 +279,9 @@ defmodule MlDHT.Server.Worker do
     ## Allows giving atoms as rt_name to this function, e.g. :ipv4
     {:ok, _pid} =
       node_id_enc
-      |> MlDHT.Registry.get_pid(MlDHT.RoutingTable.Supervisor)
+      |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.RoutingTable.Supervisor)
       |> DynamicSupervisor.start_child({
-        MlDHT.RoutingTable.Supervisor,
+        CrissCrossDHT.RoutingTable.Supervisor,
         node_id: node_id,
         ip_tuple: ip_tuple,
         node_id_enc: node_id_enc,
@@ -286,7 +298,12 @@ defmodule MlDHT.Server.Worker do
 
     node_id
     |> Utils.encode_human()
-    |> MlDHT.Registry.get_pid(MlDHT.RoutingTable.Worker, rt_name)
+    |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.RoutingTable.Worker, rt_name)
+  end
+
+  def handle_call({:has_announced_cluster, cluster, infohash}, _, state) do
+    has_announced = state.storage_mod.has_announced_cluster(state.storage_pid, cluster, infohash)
+    {:reply, has_announced, state}
   end
 
   def handle_cast({:bootstrap, socket_tuple}, state) do
@@ -304,7 +321,7 @@ defmodule MlDHT.Server.Worker do
         nodes =
           state.node_id
           |> get_rtable(cluster_header, :ipv4)
-          |> MlDHT.RoutingTable.Worker.closest_nodes(key)
+          |> CrissCrossDHT.RoutingTable.Worker.closest_nodes(key)
 
         {:ok, signature} = Utils.sign(value, rsa_priv_key)
 
@@ -320,7 +337,7 @@ defmodule MlDHT.Server.Worker do
         payload = KRPCProtocol.encode(:store, args)
         payload = Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
 
-        for node <- MlDHT.Search.Worker.nodes_to_search_nodes(nodes) do
+        for node <- CrissCrossDHT.Search.Worker.nodes_to_search_nodes(nodes) do
           :gen_udp.send(state.socket, node.ip, node.port, payload)
         end
 
@@ -332,8 +349,8 @@ defmodule MlDHT.Server.Worker do
   end
 
   def handle_cast(
-        {:store_name, cluster_header, rsa_priv_name_key, public_key_hash, name, value, local,
-         remote, ttl, tid},
+        {:store_name, cluster_header, rsa_priv_name_key, pem_string, public_key_hash, name, value,
+         local, remote, ttl, tid},
         state
       ) do
     # TODO What about ipv6?
@@ -342,12 +359,10 @@ defmodule MlDHT.Server.Worker do
     case state.cluster_config do
       %{^cluster_header => %{private_key: rsa_priv_key} = cluster_secret}
       when not is_nil(rsa_priv_key) ->
-        storage_pid = state.node_id |> Utils.encode_human() |> Registry.get_pid(Storage)
-
         {:ok, signature} = Utils.sign(value, rsa_priv_key)
 
         {generation, to_sign} =
-          case Storage.get_name(storage_pid, name) do
+          case state.storage_mod.get_name(state.storage_pid, cluster_header, name) do
             nil ->
               {0, Utils.combine_to_sign([0, signature])}
 
@@ -364,14 +379,16 @@ defmodule MlDHT.Server.Worker do
           value: value,
           ttl: ttl,
           public_key: public_key_hash,
+          pem_string: pem_string,
           generation: generation,
           signature: signature,
           signature_ns: signature_ns
         ]
 
         if local do
-          Storage.put_name(
-            storage_pid,
+          state.storage_mod.put_name(
+            state.storage_pid,
+            cluster_header,
             name,
             value,
             generation,
@@ -387,9 +404,9 @@ defmodule MlDHT.Server.Worker do
           nodes =
             state.node_id
             |> get_rtable(cluster_header, :ipv4)
-            |> MlDHT.RoutingTable.Worker.closest_nodes(name)
+            |> CrissCrossDHT.RoutingTable.Worker.closest_nodes(name)
 
-          for node <- MlDHT.Search.Worker.nodes_to_search_nodes(nodes) do
+          for node <- CrissCrossDHT.Search.Worker.nodes_to_search_nodes(nodes) do
             :gen_udp.send(state.socket, node.ip, node.port, payload)
           end
         end
@@ -406,17 +423,18 @@ defmodule MlDHT.Server.Worker do
     nodes =
       state.node_id
       |> get_rtable(cluster, :ipv4)
-      |> MlDHT.RoutingTable.Worker.closest_nodes(infohash)
+      |> CrissCrossDHT.RoutingTable.Worker.closest_nodes(infohash)
 
     state.node_id_enc
-    |> MlDHT.Registry.get_pid(MlDHT.SearchName.Supervisor)
-    |> MlDHT.SearchName.Supervisor.start_child(
+    |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.SearchName.Supervisor)
+    |> CrissCrossDHT.SearchName.Supervisor.start_child(
       :find_name,
       state.socket,
       state.node_id,
+      state.ip_tuple,
       state.cluster_config
     )
-    |> MlDHT.SearchName.Worker.find_name(
+    |> CrissCrossDHT.SearchName.Worker.find_name(
       cluster,
       target: infohash,
       generation: generation,
@@ -432,18 +450,18 @@ defmodule MlDHT.Server.Worker do
     nodes =
       state.node_id
       |> get_rtable(cluster, :ipv4)
-      |> MlDHT.RoutingTable.Worker.closest_nodes(infohash)
+      |> CrissCrossDHT.RoutingTable.Worker.closest_nodes(infohash)
 
     state.node_id_enc
-    |> MlDHT.Registry.get_pid(MlDHT.SearchValue.Supervisor)
-    |> MlDHT.SearchValue.Supervisor.start_child(
+    |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.SearchValue.Supervisor)
+    |> CrissCrossDHT.SearchValue.Supervisor.start_child(
       :find_value,
       state.socket,
       state.node_id,
       state.ip_tuple,
       state.cluster_config
     )
-    |> MlDHT.SearchValue.Worker.find_value(
+    |> CrissCrossDHT.SearchValue.Worker.find_value(
       cluster,
       target: infohash,
       start_nodes: nodes,
@@ -453,19 +471,25 @@ defmodule MlDHT.Server.Worker do
     {:noreply, state}
   end
 
-  def handle_cast({:search_announce, cluster, infohash, callback}, state) do
+  def handle_cast({:cluster_announce, cluster, infohash, ttl}, state) do
+    :ok = state.storage_mod.cluster_announce(state.storage_pid, cluster, infohash, ttl)
+    {:noreply, state}
+  end
+
+  def handle_cast({:search_announce, cluster, infohash, callback, ttl}, state) do
     # TODO What about ipv6?
     nodes =
       state.node_id
       |> get_rtable(cluster, :ipv4)
-      |> MlDHT.RoutingTable.Worker.closest_nodes(infohash)
+      |> CrissCrossDHT.RoutingTable.Worker.closest_nodes(infohash)
 
     state.node_id_enc
-    |> MlDHT.Registry.get_pid(MlDHT.Search.Supervisor)
-    |> MlDHT.Search.Supervisor.start_child(
+    |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.Search.Supervisor)
+    |> CrissCrossDHT.Search.Supervisor.start_child(
       :get_peers,
       state.socket,
       state.node_id,
+      state.ip_tuple,
       state.cluster_config
     )
     |> Search.get_peers(
@@ -474,24 +498,28 @@ defmodule MlDHT.Server.Worker do
       start_nodes: nodes,
       callback: callback,
       port: 0,
-      announce: true
+      announce: true,
+      ttl: ttl
     )
+
+    :ok = state.storage_mod.cluster_announce(state.storage_pid, cluster, infohash, ttl)
 
     {:noreply, state}
   end
 
-  def handle_cast({:search_announce, cluster, infohash, callback, port}, state) do
+  def handle_cast({:search_announce, cluster, infohash, callback, ttl, port}, state) do
     nodes =
       state.node_id
       |> get_rtable(cluster, :ipv4)
-      |> MlDHT.RoutingTable.Worker.closest_nodes(infohash)
+      |> CrissCrossDHT.RoutingTable.Worker.closest_nodes(infohash)
 
     state.node_id_enc
-    |> MlDHT.Registry.get_pid(MlDHT.Search.Supervisor)
-    |> MlDHT.Search.Supervisor.start_child(
+    |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.Search.Supervisor)
+    |> CrissCrossDHT.Search.Supervisor.start_child(
       :get_peers,
       state.socket,
       state.node_id,
+      state.ip_tuple,
       state.cluster_config
     )
     |> Search.get_peers(
@@ -500,8 +528,11 @@ defmodule MlDHT.Server.Worker do
       start_nodes: nodes,
       callback: callback,
       port: port,
-      announce: true
+      announce: true,
+      ttl: ttl
     )
+
+    :ok = state.storage_mod.cluster_announce(state.storage_pid, cluster, infohash, ttl)
 
     {:noreply, state}
   end
@@ -510,14 +541,15 @@ defmodule MlDHT.Server.Worker do
     nodes =
       state.node_id
       |> get_rtable(cluster, :ipv4)
-      |> MlDHT.RoutingTable.Worker.closest_nodes(infohash)
+      |> CrissCrossDHT.RoutingTable.Worker.closest_nodes(infohash)
 
     state.node_id_enc
-    |> MlDHT.Registry.get_pid(MlDHT.Search.Supervisor)
-    |> MlDHT.Search.Supervisor.start_child(
+    |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.Search.Supervisor)
+    |> CrissCrossDHT.Search.Supervisor.start_child(
       :get_peers,
       state.socket,
       state.node_id,
+      state.ip_tuple,
       state.cluster_config
     )
     |> Search.get_peers(
@@ -636,7 +668,7 @@ defmodule MlDHT.Server.Worker do
     nodes =
       state.node_id
       |> get_rtable(cluster_header, ip_vers)
-      |> MlDHT.RoutingTable.Worker.closest_nodes(remote.target, remote.node_id)
+      |> CrissCrossDHT.RoutingTable.Worker.closest_nodes(remote.target, remote.node_id)
       |> Enum.map(fn pid ->
         try do
           if Process.alive?(pid) do
@@ -685,25 +717,31 @@ defmodule MlDHT.Server.Worker do
     token = Utils.hash(Utils.tuple_to_ipstr(ip, port) <> state.secret)
 
     ## Get pid of the storage genserver
-    storage_pid = state.node_id |> Utils.encode_human() |> Registry.get_pid(Storage)
-
     args =
-      if Storage.has_nodes_for_infohash?(storage_pid, remote.info_hash) do
-        values = Storage.get_nodes(storage_pid, remote.info_hash)
+      if state.storage_mod.has_nodes_for_infohash?(
+           state.storage_pid,
+           cluster_header,
+           remote.info_hash
+         ) do
+        values = state.storage_mod.get_nodes(state.storage_pid, cluster_header, remote.info_hash)
         [node_id: state.node_id, values: values, tid: remote.tid, token: token]
       else
         ## Get the closest nodes for the requested info_hash
         rtable = state.node_id |> get_rtable(cluster_header, ip_vers)
 
         nodes =
-          Enum.map(MlDHT.RoutingTable.Worker.closest_nodes(rtable, remote.info_hash), fn pid ->
-            Node.to_tuple(pid)
-          end)
+          Enum.map(
+            CrissCrossDHT.RoutingTable.Worker.closest_nodes(rtable, remote.info_hash),
+            fn pid ->
+              Node.to_tuple(pid)
+            end
+          )
 
         Logger.debug("[#{Utils.encode_human(remote.node_id)}] << get_peers_reply (nodes)")
         [node_id: state.node_id, nodes: nodes, tid: remote.tid, token: token]
       end
 
+    Logger.debug("PEERS ARGS: #{inspect(args)}")
     payload = KRPCProtocol.encode(:get_peers_reply, args)
 
     :gen_udp.send(
@@ -739,10 +777,14 @@ defmodule MlDHT.Server.Worker do
           remote.port
         end
 
-      ## Get pid of the storage genserver
-      storage_pid = state.node_id |> Utils.encode_human() |> Registry.get_pid(Storage)
-
-      Storage.put(storage_pid, remote.info_hash, ip, port)
+      state.storage_mod.put(
+        state.storage_pid,
+        cluster_header,
+        remote.info_hash,
+        ip,
+        port,
+        remote.ttl
+      )
 
       ## Sending a ping_reply back as an acknowledgement
       send_ping_reply(
@@ -787,18 +829,18 @@ defmodule MlDHT.Server.Worker do
     ## Generate a token for the requesting node
     token = Utils.hash(Utils.tuple_to_ipstr(ip, port) <> state.secret)
 
-    ## Get pid of the storage genserver
-    storage_pid = state.node_id |> Utils.encode_human() |> Registry.get_pid(Storage)
-
     payload =
-      case Storage.get_value(storage_pid, remote.key) do
+      case state.storage_mod.get_value(state.storage_pid, cluster_header, remote.key) do
         nil ->
           rtable = state.node_id |> get_rtable(cluster_header, ip_vers)
 
           nodes =
-            Enum.map(MlDHT.RoutingTable.Worker.closest_nodes(rtable, remote.key), fn pid ->
-              Node.to_tuple(pid)
-            end)
+            Enum.map(
+              CrissCrossDHT.RoutingTable.Worker.closest_nodes(rtable, remote.key),
+              fn pid ->
+                Node.to_tuple(pid)
+              end
+            )
 
           Logger.debug("[#{Utils.encode_human(remote.node_id)}] << find_value (nodes)")
 
@@ -850,18 +892,18 @@ defmodule MlDHT.Server.Worker do
     ## Generate a token for the requesting node
     token = Utils.hash(Utils.tuple_to_ipstr(ip, port) <> state.secret)
 
-    ## Get pid of the storage genserver
-    storage_pid = state.node_id |> Utils.encode_human() |> Registry.get_pid(Storage)
-
     payload =
-      case Storage.get_name(storage_pid, remote.name) do
+      case state.storage_mod.get_name(state.storage_pid, cluster_header, remote.name) do
         nil ->
           rtable = state.node_id |> get_rtable(cluster_header, ip_vers)
 
           nodes =
-            Enum.map(MlDHT.RoutingTable.Worker.closest_nodes(rtable, remote.name), fn pid ->
-              Node.to_tuple(pid)
-            end)
+            Enum.map(
+              CrissCrossDHT.RoutingTable.Worker.closest_nodes(rtable, remote.name),
+              fn pid ->
+                Node.to_tuple(pid)
+              end
+            )
 
           Logger.debug("[#{Utils.encode_human(remote.node_id)}] << find_name (nodes)")
 
@@ -914,18 +956,16 @@ defmodule MlDHT.Server.Worker do
 
     valid_signature = Utils.verify_signature(cluster_secret, remote.value, remote.signature)
 
-    storage_pid = state.node_id |> Utils.encode_human() |> Registry.get_pid(Storage)
-
     hash_matches =
       Utils.hash(remote.public_key) == remote.name and
-        Utils.check_generation(storage_pid, remote.name, remote.generation) and
-        case get_public_key(
-               state.cache,
-               state.self_pid,
-               storage_pid,
-               cluster_header,
-               remote.public_key
-             ) do
+        Utils.check_generation(
+          state.storage_mod,
+          state.storage_pid,
+          cluster_header,
+          remote.name,
+          remote.generation
+        ) and
+        case ExPublicKey.loads(remote.pem_string) do
           {:ok, public_key} ->
             Utils.verify_signature(
               %{public_key: public_key},
@@ -934,7 +974,7 @@ defmodule MlDHT.Server.Worker do
             )
 
           _ ->
-            Logger.debug(
+            Logger.warning(
               "Could not found NameService public key, #{Utils.encode_human(remote.public_key)}"
             )
 
@@ -945,8 +985,9 @@ defmodule MlDHT.Server.Worker do
       if hash_matches and valid_signature do
         ## Get pid of the storage genserver
 
-        Storage.put_name(
-          storage_pid,
+        state.storage_mod.put_name(
+          state.storage_pid,
+          cluster_header,
           remote.name,
           remote.value,
           remote.generation,
@@ -989,10 +1030,13 @@ defmodule MlDHT.Server.Worker do
 
     payload =
       if hash_matches and valid_signature do
-        ## Get pid of the storage genserver
-        storage_pid = state.node_id |> Utils.encode_human() |> Registry.get_pid(Storage)
-
-        Storage.put_value(storage_pid, remote.key, remote.value, remote.ttl)
+        state.storage_mod.put_value(
+          state.storage_pid,
+          cluster_header,
+          remote.key,
+          remote.value,
+          remote.ttl
+        )
 
         ## Sending a store_reply back as an acknowledgement
         Logger.debug("[#{Utils.encode_human(remote.node_id)}] >> store true")
@@ -1045,7 +1089,7 @@ defmodule MlDHT.Server.Worker do
 
     tid_enc = Utils.encode_human(remote.tid)
 
-    case MlDHT.Registry.get_pid(state.node_id_enc, Search, tid_enc) do
+    case CrissCrossDHT.Registry.get_pid(state.node_id_enc, Search, tid_enc) do
       nil ->
         Logger.debug("[#{Utils.encode_human(remote.node_id)}] ignore unknown tid: #{tid_enc} ")
 
@@ -1083,7 +1127,7 @@ defmodule MlDHT.Server.Worker do
       {socket, ip_vers}
     )
 
-    case MlDHT.Registry.lookup(remote.tid) do
+    case CrissCrossDHT.Registry.lookup(remote.tid) do
       [] ->
         tid_enc = Utils.encode_human(remote.tid)
 
@@ -1118,7 +1162,7 @@ defmodule MlDHT.Server.Worker do
       {socket, ip_vers}
     )
 
-    case MlDHT.Registry.lookup(remote.tid) do
+    case CrissCrossDHT.Registry.lookup(remote.tid) do
       [] ->
         tid_enc = Utils.encode_human(remote.tid)
 
@@ -1155,7 +1199,7 @@ defmodule MlDHT.Server.Worker do
 
     tid_enc = Utils.encode_human(remote.tid)
 
-    case MlDHT.Registry.get_pid(state.node_id_enc, Search, tid_enc) do
+    case CrissCrossDHT.Registry.get_pid(state.node_id_enc, Search, tid_enc) do
       nil ->
         Logger.debug("[#{Utils.encode_human(remote.node_id)}] ignore unknown tid: #{tid_enc} ")
 
@@ -1186,7 +1230,7 @@ defmodule MlDHT.Server.Worker do
 
     tid_enc = Utils.encode_human(remote.tid)
 
-    case MlDHT.Registry.get_pid(state.node_id_enc, SearchValue, tid_enc) do
+    case CrissCrossDHT.Registry.get_pid(state.node_id_enc, SearchValue, tid_enc) do
       nil ->
         Logger.debug("[#{Utils.encode_human(remote.node_id)}] ignore unknown tid: #{tid_enc} ")
 
@@ -1217,7 +1261,7 @@ defmodule MlDHT.Server.Worker do
 
     tid_enc = Utils.encode_human(remote.tid)
 
-    case MlDHT.Registry.get_pid(state.node_id_enc, SearchName, tid_enc) do
+    case CrissCrossDHT.Registry.get_pid(state.node_id_enc, SearchName, tid_enc) do
       nil ->
         Logger.debug("[#{Utils.encode_human(remote.node_id)}] ignore unknown tid: #{tid_enc} ")
 
@@ -1248,7 +1292,7 @@ defmodule MlDHT.Server.Worker do
 
     tid_enc = Utils.encode_human(remote.tid)
 
-    case MlDHT.Registry.get_pid(state.node_id_enc, SearchValue, tid_enc) do
+    case CrissCrossDHT.Registry.get_pid(state.node_id_enc, SearchValue, tid_enc) do
       nil ->
         Logger.debug("[#{Utils.encode_human(remote.node_id)}] ignore unknown tid: #{tid_enc} ")
 
@@ -1279,7 +1323,7 @@ defmodule MlDHT.Server.Worker do
 
     tid_enc = Utils.encode_human(remote.tid)
 
-    case MlDHT.Registry.get_pid(state.node_id_enc, SearchName, tid_enc) do
+    case CrissCrossDHT.Registry.get_pid(state.node_id_enc, SearchName, tid_enc) do
       nil ->
         Logger.debug("[#{Utils.encode_human(remote.node_id)}] ignore unknown tid: #{tid_enc} ")
 
@@ -1333,11 +1377,12 @@ defmodule MlDHT.Server.Worker do
     for {cluster_header, _} <- state.cluster_config do
       ## Start a find_node search to collect neighbors for our routing table
       state.node_id_enc
-      |> MlDHT.Registry.get_pid(MlDHT.Search.Supervisor)
-      |> MlDHT.Search.Supervisor.start_child(
+      |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.Search.Supervisor)
+      |> CrissCrossDHT.Search.Supervisor.start_child(
         :find_node,
         socket,
         state.node_id,
+        state.ip_tuple,
         state.cluster_config
       )
       |> Search.find_node(cluster_header, target: state.node_id, start_nodes: nodes)
@@ -1393,24 +1438,24 @@ defmodule MlDHT.Server.Worker do
   defp query_received(remote_node_id, node_id, ip_port, cluster, {socket, ip_vers}) do
     rtable = node_id |> get_rtable(cluster, ip_vers)
 
-    if node_pid = MlDHT.RoutingTable.Worker.get(rtable, remote_node_id) do
+    if node_pid = CrissCrossDHT.RoutingTable.Worker.get(rtable, remote_node_id) do
       Node.query_received(node_pid)
       index = Node.bucket_index(node_pid)
-      MlDHT.RoutingTable.Worker.update_bucket(rtable, index)
+      CrissCrossDHT.RoutingTable.Worker.update_bucket(rtable, index)
     else
-      MlDHT.RoutingTable.Worker.add(rtable, remote_node_id, ip_port, socket)
+      CrissCrossDHT.RoutingTable.Worker.add(rtable, remote_node_id, ip_port, socket)
     end
   end
 
   defp response_received(remote_node_id, node_id, ip_port, cluster, {socket, ip_vers}) do
     rtable = node_id |> get_rtable(cluster, ip_vers)
 
-    if node_pid = MlDHT.RoutingTable.Worker.get(rtable, remote_node_id) do
+    if node_pid = CrissCrossDHT.RoutingTable.Worker.get(rtable, remote_node_id) do
       Node.response_received(node_pid)
       index = Node.bucket_index(node_pid)
-      MlDHT.RoutingTable.Worker.update_bucket(rtable, index)
+      CrissCrossDHT.RoutingTable.Worker.update_bucket(rtable, index)
     else
-      MlDHT.RoutingTable.Worker.add(rtable, remote_node_id, ip_port, socket)
+      CrissCrossDHT.RoutingTable.Worker.add(rtable, remote_node_id, ip_port, socket)
     end
   end
 

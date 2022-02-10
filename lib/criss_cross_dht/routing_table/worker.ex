@@ -1,4 +1,4 @@
-defmodule MlDHT.RoutingTable.Worker do
+defmodule CrissCrossDHT.RoutingTable.Worker do
   @moduledoc false
 
   use GenServer
@@ -6,12 +6,12 @@ defmodule MlDHT.RoutingTable.Worker do
   require Logger
   require Bitwise
 
-  alias MlDHT.Server.Utils
-  alias MlDHT.RoutingTable.Node
-  alias MlDHT.RoutingTable.Bucket
-  alias MlDHT.RoutingTable.Distance
+  alias CrissCrossDHT.Server.Utils
+  alias CrissCrossDHT.RoutingTable.Node
+  alias CrissCrossDHT.RoutingTable.Bucket
+  alias CrissCrossDHT.RoutingTable.Distance
 
-  alias MlDHT.Search.Worker, as: Search
+  alias CrissCrossDHT.Search.Worker, as: Search
 
   #############
   # Constants #
@@ -341,10 +341,16 @@ defmodule MlDHT.RoutingTable.Worker do
 
         ## Start find_node search
         state.node_id_enc
-        |> MlDHT.Registry.get_pid(MlDHT.Search.Supervisor)
-        |> MlDHT.Search.Supervisor.start_child(:find_node, socket, state.node_id, %{
-          state.cluster => state.cluster_secret
-        })
+        |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.Search.Supervisor)
+        |> CrissCrossDHT.Search.Supervisor.start_child(
+          :find_node,
+          socket,
+          state.node_id,
+          state.ip_tuple,
+          %{
+            state.cluster => state.cluster_secret
+          }
+        )
         |> Search.find_node(state.cluster, target: target, start_nodes: [node])
 
       nil ->
@@ -372,7 +378,10 @@ defmodule MlDHT.RoutingTable.Worker do
         {:ok, pid} =
           my_node_id
           |> Utils.encode_human()
-          |> MlDHT.Registry.get_pid(MlDHT.RoutingTable.NodeSupervisor, state.rt_name)
+          |> CrissCrossDHT.Registry.get_pid(
+            CrissCrossDHT.RoutingTable.NodeSupervisor,
+            state.rt_name
+          )
           |> DynamicSupervisor.start_child(node_child)
 
         new_bucket = Bucket.add(bucket, pid)

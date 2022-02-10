@@ -1,9 +1,9 @@
-defmodule MlDHT.Mixfile do
+defmodule CrissCrossDHT.Mixfile do
   use Mix.Project
 
   def project do
     [
-      app: :mldht,
+      app: :crisscrossdht,
       version: "0.0.3",
       elixir: "~> 1.2",
       build_embedded: Mix.env() == :prod,
@@ -16,7 +16,7 @@ defmodule MlDHT.Mixfile do
 
   def application do
     [
-      # mod: {MlDHT, []},
+      # mod: {CrissCrossDHT, []},
       applications: [:logger]
     ]
   end
@@ -40,7 +40,7 @@ defmodule MlDHT.Mixfile do
 
   defp package do
     [
-      name: :mldht,
+      name: :crisscrossdht,
       files: ["lib", "mix.exs", "README*", "LICENSE*"],
       maintainers: ["Florian Adamsky"],
       licenses: ["MIT"],

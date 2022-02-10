@@ -1,12 +1,12 @@
-defmodule MlDHT do
+defmodule CrissCrossDHT do
   use Application
 
   require Logger
 
-  alias MlDHT.Server.Utils, as: Utils
+  alias CrissCrossDHT.Server.Utils, as: Utils
 
   @moduledoc ~S"""
-  MlDHT is an Elixir package that provides a Kademlia Distributed Hash Table
+  CrissCrossDHT is an Elixir package that provides a Kademlia Distributed Hash Table
   (DHT) implementation according to [BitTorrent Enhancement Proposals (BEP)
   05](http://www.bittorrent.org/beps/bep_0005.html). This specific
   implementation is called "mainline" variant.
@@ -24,6 +24,8 @@ defmodule MlDHT do
   A binary which contains the cluster
   """
   @type cluster :: binary
+
+  @type ttl :: integer
 
   @typedoc """
   A binary which contains the infohash of a torrent. An infohash is a SHA1
@@ -52,11 +54,11 @@ defmodule MlDHT do
 
   @cluster_name Utils.encode_human(Utils.hash(Utils.combine_to_sign([@cypher, @public_key])))
 
-  @process_name MlDHT.Server.Worker
+  @process_name CrissCrossDHT.Server.Worker
 
   @doc false
   def start(_type, _args) do
-    MlDHT.Registry.start()
+    CrissCrossDHT.Registry.start()
 
     config = %{
       port: System.get_env("PORT", "3000") |> String.to_integer(),
@@ -69,16 +71,16 @@ defmodule MlDHT do
         %{node_id: "8thbnFn4HZ24vVojR5qV6jsLCoqMaeBAVSxioBLmzGzC", host: "localhost", port: 3000}
       ],
       k_bucket_size: 8,
-      storage: {MlDHT.Server.Storage, []}
+      storage: {CrissCrossDHT.Server.Storage, []}
     }
 
     Logger.debug("Cluster: #{@cluster_name}")
     ## Start the main supervisor
-    MlDHT.Supervisor.start_link(
+    CrissCrossDHT.Supervisor.start_link(
       node_id: @node_id,
       worker_name: @process_name,
       config: config,
-      name: MlDHT.Registry.via(@node_id_enc, MlDHT.Supervisor)
+      name: CrissCrossDHT.Registry.via(@node_id_enc, CrissCrossDHT.Supervisor)
     )
   end
 
@@ -89,52 +91,58 @@ defmodule MlDHT do
   end
 
   def store(cluster, value, ttl) do
-    MlDHT.Server.Worker.store(@process_name, cluster, value, ttl)
+    CrissCrossDHT.Server.Worker.store(@process_name, cluster, value, ttl)
   end
 
   def store(cluster, value, ttl, tid) do
-    MlDHT.Server.Worker.store(@process_name, cluster, value, ttl, tid)
+    CrissCrossDHT.Server.Worker.store(@process_name, cluster, value, ttl, tid)
   end
 
   def find_value(cluster, infohash, callback) do
-    MlDHT.Server.Worker.find_value(@process_name, cluster, infohash, callback)
+    CrissCrossDHT.Server.Worker.find_value(@process_name, cluster, infohash, callback)
   end
 
   def find_value_sync(cluster, infohash, timeout \\ 10_000) do
-    MlDHT.Server.Worker.find_value_sync(@process_name, cluster, infohash, timeout)
+    CrissCrossDHT.Server.Worker.find_value_sync(@process_name, cluster, infohash, timeout)
   end
 
-  def store_name(cluster, rsa_priv_key, value, local, remote, ttl) do
-    MlDHT.Server.Worker.store_name(
+  def store_name(cluster, rsa_priv_key, value, save_local, save_remote, ttl) do
+    CrissCrossDHT.Server.Worker.store_name(
       @process_name,
       cluster,
       rsa_priv_key,
       value,
-      local,
-      remote,
+      save_local,
+      save_remote,
       ttl
     )
   end
 
-  def store_name(cluster, rsa_priv_key, value, local, remote, ttl, tid) do
-    MlDHT.Server.Worker.store_name(
+  def store_name(cluster, rsa_priv_key, value, save_local, save_remote, ttl, tid) do
+    CrissCrossDHT.Server.Worker.store_name(
       @process_name,
       cluster,
       rsa_priv_key,
       value,
-      local,
-      remote,
+      save_local,
+      save_remote,
       ttl,
       tid
     )
   end
 
   def find_name(cluster, infohash, generation, callback) do
-    MlDHT.Server.Worker.find_name(@process_name, cluster, infohash, generation, callback)
+    CrissCrossDHT.Server.Worker.find_name(@process_name, cluster, infohash, generation, callback)
   end
 
   def find_name_sync(cluster, infohash, generation, timeout \\ 10_000) do
-    MlDHT.Server.Worker.find_name_sync(@process_name, cluster, infohash, generation, timeout)
+    CrissCrossDHT.Server.Worker.find_name_sync(
+      @process_name,
+      cluster,
+      infohash,
+      generation,
+      timeout
+    )
   end
 
   def ref() do
@@ -162,14 +170,14 @@ defmodule MlDHT do
   ## Example
       iex> "3F19B149F53A50E14FC0B79926A391896EABAB6F"
             |> Base.decode16!
-            |> MlDHT.search(fn(node) ->
+            |> CrissCrossDHT.search(fn(node) ->
              {ip, port} = node
              IO.puts "ip: #{inspect ip} port: #{port}"
            end)
   """
   @spec search(cluster, infohash, fun) :: atom
   def search(cluster, infohash, callback) do
-    MlDHT.Server.Worker.search(@process_name, cluster, infohash, callback)
+    CrissCrossDHT.Server.Worker.search(@process_name, cluster, infohash, callback)
   end
 
   @doc ~S"""
@@ -181,14 +189,14 @@ defmodule MlDHT do
   ## Example
       iex> "3F19B149F53A50E14FC0B79926A391896EABAB6F"
            |> Base.decode16!
-           |> MlDHT.search_announce(fn(node) ->
+           |> CrissCrossDHT.search_announce(fn(node) ->
              {ip, port} = node
              IO.puts "ip: #{inspect ip} port: #{port}"
            end)
   """
-  @spec search_announce(cluster, infohash, fun) :: atom
-  def search_announce(cluster, infohash, callback) do
-    MlDHT.Server.Worker.search_announce(@process_name, cluster, infohash, callback)
+  @spec search_announce(cluster, infohash, ttl, fun) :: atom
+  def search_announce(cluster, infohash, ttl, callback) do
+    CrissCrossDHT.Server.Worker.search_announce(@process_name, cluster, infohash, ttl, callback)
   end
 
   @doc ~S"""
@@ -199,13 +207,28 @@ defmodule MlDHT do
   ## Example
       iex> "3F19B149F53A50E14FC0B79926A391896EABAB6F" ## Ubuntu 15.04
            |> Base.decode16!
-           |> MlDHT.search_announce(fn(node) ->
+           |> CrissCrossDHT.search_announce(fn(node) ->
              {ip, port} = node
              IO.puts "ip: #{inspect ip} port: #{port}"
            end, 6881)
   """
-  @spec search_announce(cluster, infohash, fun, tcp_port) :: atom
-  def search_announce(cluster, infohash, callback, port) do
-    MlDHT.Server.Worker.search_announce(@process_name, cluster, infohash, callback, port)
+  @spec search_announce(cluster, infohash, fun, ttl, tcp_port) :: atom
+  def search_announce(cluster, infohash, callback, ttl, port) do
+    CrissCrossDHT.Server.Worker.search_announce(
+      @process_name,
+      cluster,
+      infohash,
+      port,
+      ttl,
+      callback
+    )
+  end
+
+  def cluster_announce(cluster, infohash, ttl) do
+    CrissCrossDHT.Server.Worker.cluster_announce(@process_name, cluster, infohash, ttl)
+  end
+
+  def has_announced(cluster, infohash) do
+    CrissCrossDHT.Server.Worker.has_announced_cluster(@process_name, cluster, infohash)
   end
 end

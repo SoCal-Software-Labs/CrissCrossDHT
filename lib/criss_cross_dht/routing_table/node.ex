@@ -1,9 +1,9 @@
-defmodule MlDHT.RoutingTable.Node do
+defmodule CrissCrossDHT.RoutingTable.Node do
   @moduledoc false
 
   use GenServer, restart: :temporary
 
-  alias MlDHT.Server.Utils
+  alias CrissCrossDHT.Server.Utils
   require Logger
 
   def start_link(opts) do

@@ -1,4 +1,4 @@
-defmodule MlDHT.RoutingTable.Supervisor do
+defmodule CrissCrossDHT.RoutingTable.Supervisor do
   use Supervisor
 
   require Logger
@@ -10,7 +10,7 @@ defmodule MlDHT.RoutingTable.Supervisor do
   def start_link(opts) do
     name =
       opts[:node_id_enc]
-      |> MlDHT.Registry.via(MlDHT.RoutingTable.Supervisor, opts[:rt_name])
+      |> CrissCrossDHT.Registry.via(CrissCrossDHT.RoutingTable.Supervisor, opts[:rt_name])
 
     Supervisor.start_link(__MODULE__, opts, name: name)
   end
@@ -25,15 +25,20 @@ defmodule MlDHT.RoutingTable.Supervisor do
     cluster_secret = args[:cluster_secret]
 
     children = [
-      {MlDHT.RoutingTable.Worker,
+      {CrissCrossDHT.RoutingTable.Worker,
        rt_name: rt_name,
        node_id: node_id,
        cluster: cluster,
        cluster_secret: cluster_secret,
        ip_tuple: ip_tuple,
-       name: MlDHT.Registry.via(node_id_enc, MlDHT.RoutingTable.Worker, rt_name)},
+       name: CrissCrossDHT.Registry.via(node_id_enc, CrissCrossDHT.RoutingTable.Worker, rt_name)},
       {DynamicSupervisor,
-       name: MlDHT.Registry.via(node_id_enc, MlDHT.RoutingTable.NodeSupervisor, rt_name),
+       name:
+         CrissCrossDHT.Registry.via(
+           node_id_enc,
+           CrissCrossDHT.RoutingTable.NodeSupervisor,
+           rt_name
+         ),
        strategy: :one_for_one}
     ]
 

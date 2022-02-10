@@ -1,11 +1,11 @@
-defmodule MlDHT.Registry do
+defmodule CrissCrossDHT.Registry do
   require Logger
 
   @name __MODULE__
 
   @moduledoc ~S"""
   This module just capsules functions that avoid boilerplate when using the
-  MlDHT Registry. (They are not callbacks)
+  CrissCrossDHT Registry. (They are not callbacks)
   """
 
   def start, do: Registry.start_link(keys: :unique, name: @name)
@@ -21,11 +21,11 @@ defmodule MlDHT.Registry do
 
   def get_pid(name) do
     case Registry.lookup(@name, name) do
-      [{pid, _}] ->
+      [{pid, _} | _] ->
         pid
 
       _e ->
-        Logger.debug("Could not find Process with name #{name} in MlDHT.Registry")
+        Logger.debug("Could not find Process with name #{name} in CrissCrossDHT.Registry")
         nil
     end
   end
@@ -39,7 +39,7 @@ defmodule MlDHT.Registry do
         Enum.map(pids, fn {pid, _} -> pid end)
 
       _e ->
-        Logger.debug("Could not find Process with name #{name} in MlDHT.Registry")
+        Logger.debug("Could not find Process with name #{name} in CrissCrossDHT.Registry")
         nil
     end
   end

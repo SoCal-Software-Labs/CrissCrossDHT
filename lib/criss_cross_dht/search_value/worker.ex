@@ -1,4 +1,4 @@
-defmodule MlDHT.Search.Worker do
+defmodule CrissCrossDHT.SearchValue.Worker do
   @moduledoc false
 
   @typedoc """
@@ -7,18 +7,18 @@ defmodule MlDHT.Search.Worker do
   @type transaction_id :: <<_::16>>
 
   @typedoc """
-  A DHT search is divided in a :get_peers or a :find_node search.
+  A DHT search is divided in a :find_value search.
   """
-  @type search_type :: :get_peers | :find_node
+  @type search_type :: :find_value
 
   use GenServer, restart: :temporary
 
   require Logger
 
-  alias MlDHT.RoutingTable.Distance
-  alias MlDHT.Search.Node
-  alias MlDHT.Server.Worker
-  alias MlDHT.Server.Utils
+  alias CrissCrossDHT.RoutingTable.Distance
+  alias CrissCrossDHT.Search.Node
+  alias CrissCrossDHT.Server.Worker
+  alias CrissCrossDHT.Server.Utils
 
   ##############
   # Client API #
@@ -29,6 +29,7 @@ defmodule MlDHT.Search.Worker do
     args = [
       opts[:socket],
       opts[:node_id],
+      opts[:ip_tuple],
       opts[:type],
       opts[:tid],
       opts[:name],
@@ -38,9 +39,7 @@ defmodule MlDHT.Search.Worker do
     GenServer.start_link(__MODULE__, args, name: opts[:name])
   end
 
-  def get_peers(pid, cluster, args), do: GenServer.cast(pid, {:get_peers, cluster, args})
-
-  def find_node(pid, cluster, args), do: GenServer.cast(pid, {:find_node, cluster, args})
+  def find_value(pid, cluster, args), do: GenServer.cast(pid, {:find_value, cluster, args})
 
   @doc """
   Stops a search process.
@@ -56,16 +55,20 @@ defmodule MlDHT.Search.Worker do
 
   def tid(pid), do: GenServer.call(pid, :tid)
 
-  #  @spec handle_reply(pid, foo, list) :: :ok
-  def handle_reply(pid, remote, nodes) do
-    GenServer.cast(pid, {:handle_reply, remote, nodes})
+  #  @spec handle_reply(pid, foo, binary, binary) :: :ok
+  def handle_reply(pid, remote, key, value) do
+    GenServer.cast(pid, {:handle_reply, remote, key, value})
+  end
+
+  def handle_nodes_reply(pid, remote, nodes) do
+    GenServer.cast(pid, {:handle_nodes_reply, remote, nodes})
   end
 
   ####################
   # Server Callbacks #
   ####################
 
-  def init([socket, node_id, type, tid, name, cluster_config]) do
+  def init([socket, node_id, ip_tuple, type, tid, name, cluster_config]) do
     ## Extract the id from the via string
     {_, _, {_, id}} = name
 
@@ -73,26 +76,29 @@ defmodule MlDHT.Search.Worker do
      %{
        :socket => socket,
        :node_id => node_id,
+       :ip_tuple => ip_tuple,
        :type => type,
        :tid => tid,
        :name => id,
-       :cluster_config => cluster_config
+       :cluster_config => cluster_config,
+       :completed => false
      }}
   end
 
-  def handle_info({:search_iterate, {cluster_header, cluster_secret} = cluster_info}, state) do
-    if search_completed?(state.nodes, state.target) do
-      Logger.debug("Search is complete")
+  def wind_down(state) do
+    CrissCrossDHT.Registry.unregister(state.name)
+    {:stop, :normal, state}
+  end
 
-      ## If the search is complete and it was get_peers search, then we will
-      ## send the clostest peers an announce_peer message.
-      if Map.has_key?(state, :announce) and state.announce == true do
-        send_announce_msg(cluster_header, cluster_secret, state)
+  def handle_info({:search_iterate, {cluster_header, cluster_secret} = cluster_info}, state) do
+    if state.completed or search_completed?(state.nodes, state.target) do
+      Logger.debug("SearchValue is complete")
+
+      if not state.completed do
+        state.callback.(nil, :not_found)
       end
 
-      MlDHT.Registry.unregister(state.name)
-
-      {:stop, :normal, state}
+      wind_down(state)
     else
       ## Send queries to the 3 closest nodes
       new_state =
@@ -119,7 +125,7 @@ defmodule MlDHT.Search.Worker do
   end
 
   def handle_call(:stop, _from, state) do
-    MlDHT.Registry.unregister(state.name)
+    CrissCrossDHT.Registry.unregister(state.name)
 
     {:stop, :normal, :ok, state}
   end
@@ -132,55 +138,50 @@ defmodule MlDHT.Search.Worker do
     {:reply, state.tid, state}
   end
 
-  def handle_cast({:get_peers, cluster, args}, state) do
+  def handle_cast({:find_value, cluster, args}, state) do
     case get_cluster_info(cluster, state) do
       nil ->
-        Logger.error("get_peers cluster not configured: #{Utils.encode_human(cluster)}")
+        Logger.error("find_value cluster not configured: #{Utils.encode_human(cluster)}")
         {:noreply, state}
 
       cluster_info ->
-        new_state = start_search(:get_peers, args, cluster_info, state)
+        new_state = start_search(:find_value, args, cluster_info, state)
         {:noreply, new_state}
     end
   end
 
-  def handle_cast({:find_node, cluster, args}, state) do
-    case get_cluster_info(cluster, state) do
-      nil ->
-        Logger.error("find_node cluster not configured: #{Utils.encode_human(cluster)}")
-        {:noreply, state}
-
-      cluster_info ->
-        new_state = start_search(:find_node, args, cluster_info, state)
-
-        {:noreply, new_state}
-    end
-  end
-
-  def handle_cast({:handle_reply, remote, nil}, state) do
+  def handle_cast({:handle_reply, remote, key, value}, state) do
     old_nodes = update_responded_node(state.nodes, remote)
 
-    ## If the reply contains values we need to inform the user of this
-    ## information and call the callback function.
-    if remote.values, do: Enum.each(remote.values, state.callback)
-
-    {:noreply, %{state | nodes: old_nodes}}
+    if key == state.target and key == Utils.hash(value) do
+      state.callback.(remote, value)
+      wind_down(%{state | completed: true, nodes: old_nodes})
+    else
+      {:noreply, %{state | nodes: old_nodes}}
+    end
   end
 
-  def handle_cast({:handle_reply, remote, nodes}, state) do
+  def handle_cast({:handle_nodes_reply, remote, nodes}, state) do
     old_nodes = update_responded_node(state.nodes, remote)
 
     new_nodes =
       Enum.map(nodes, fn node ->
         {id, ip, port} = node
 
-        unless Enum.find(state.nodes, fn x -> x.id == id end) do
+        unless Enum.find(state.nodes, fn x -> x.id == id or {ip, port} == state.ip_tuple end) do
           %Node{id: id, ip: ip, port: port}
         end
       end)
       |> Enum.filter(fn x -> x != nil end)
 
-    {:noreply, %{state | nodes: old_nodes ++ new_nodes}}
+    new_state = %{state | nodes: old_nodes ++ new_nodes}
+
+    if search_completed?(new_state.nodes, new_state.target) do
+      state.callback.(nil, :not_found)
+      wind_down(new_state)
+    else
+      {:noreply, new_state}
+    end
   end
 
   #####################
@@ -204,7 +205,7 @@ defmodule MlDHT.Search.Worker do
   end
 
   ## This function merges args (keyword list) with the state map and returns a
-  ## function depending on the type (:get_peers, :find_node).
+  ## function depending on the type (:find_value).
   defp start_search(type, args, cluster_info, state) do
     send(self(), {:search_iterate, cluster_info})
 
@@ -234,21 +235,16 @@ defmodule MlDHT.Search.Worker do
     send_queries(rest, cluster_info, %{state | nodes: new_nodes})
   end
 
-  def nodes_to_search_nodes(nodes) do
+  defp nodes_to_search_nodes(nodes) do
     Enum.map(nodes, fn node ->
       {id, ip, port} = extract_node_infos(node)
       %Node{id: id, ip: ip, port: port}
     end)
   end
 
-  defp gen_request_msg(:find_node, state) do
-    args = [tid: state.tid, node_id: state.node_id, target: state.target]
-    KRPCProtocol.encode(:find_node, args)
-  end
-
-  defp gen_request_msg(:get_peers, state) do
-    args = [tid: state.tid, node_id: state.node_id, info_hash: state.target]
-    KRPCProtocol.encode(:get_peers, args)
+  defp gen_request_msg(:find_value, state) do
+    args = [tid: state.tid, node_id: state.node_id, key: state.target]
+    KRPCProtocol.encode(:find_value, args)
   end
 
   ## It is necessary that we need to know which node in our node list has
@@ -283,7 +279,7 @@ defmodule MlDHT.Search.Worker do
   defp extract_node_infos(node) when is_tuple(node), do: node
 
   defp extract_node_infos(node) when is_pid(node) do
-    MlDHT.RoutingTable.Node.to_tuple(node)
+    CrissCrossDHT.RoutingTable.Node.to_tuple(node)
   end
 
   ## This function contains the condition when a search is completed.

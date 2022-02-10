@@ -1,4 +1,4 @@
-defmodule MlDHT.RoutingTable.Distance do
+defmodule CrissCrossDHT.RoutingTable.Distance do
   @moduledoc false
 
   require Bitwise

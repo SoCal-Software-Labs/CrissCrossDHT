@@ -1,4 +1,4 @@
-defmodule MlDHT.Server.Utils do
+defmodule CrissCrossDHT.Server.Utils do
   @moduledoc false
 
   @doc ~S"""
@@ -7,12 +7,12 @@ defmodule MlDHT.Server.Utils do
   format: "127.0.0.1:6881".
 
     ## Example
-    iex> MlDHT.Server.Utils.tuple_to_ipstr({127, 0, 0, 1}, 6881)
+    iex> CrissCrossDHT.Server.Utils.tuple_to_ipstr({127, 0, 0, 1}, 6881)
     "127.0.0.1:6881"
   """
   @aad "AES256GCM"
 
-  alias MlDHT.Server.Storage
+  alias CrissCrossDHT.Server.Storage
 
   def tuple_to_ipstr({oct1, oct2, oct3, oct4}, port) do
     "#{oct1}.#{oct2}.#{oct3}.#{oct4}:#{port}"
@@ -191,8 +191,8 @@ defmodule MlDHT.Server.Utils do
     hash(hash(encoded))
   end
 
-  def check_generation(storage_pid, name, generation) do
-    case Storage.get_name(storage_pid, name) do
+  def check_generation(storage_mod, storage_pid, cluster, name, generation) do
+    case storage_mod.get_name(storage_pid, cluster, name) do
       {value, saved_gen} -> saved_gen < generation
       _ -> true
     end
