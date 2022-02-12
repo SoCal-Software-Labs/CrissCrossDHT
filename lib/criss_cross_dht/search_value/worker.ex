@@ -188,7 +188,7 @@ defmodule CrissCrossDHT.SearchValue.Worker do
   # Private Functions #
   #####################
 
-  def send_announce_msg(cluster_header, cluster_secret, state) do
+  def send_announce_msg(cluster_header, %{cypher: cypher}, state) do
     state.nodes
     |> Distance.closest_nodes(state.target, 7)
     |> Enum.filter(fn node -> node.responded == true end)
@@ -199,7 +199,7 @@ defmodule CrissCrossDHT.SearchValue.Worker do
       args = if state.port == 0, do: args ++ [implied_port: true], else: args
 
       payload = KRPCProtocol.encode(:announce_peer, args)
-      payload = Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+      payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
       :gen_udp.send(state.socket, node.ip, node.port, payload)
     end)
   end
@@ -219,12 +219,12 @@ defmodule CrissCrossDHT.SearchValue.Worker do
 
   defp send_queries([], _, state), do: state
 
-  defp send_queries([node | rest], {cluster_header, cluster_secret} = cluster_info, state) do
+  defp send_queries([node | rest], {cluster_header, %{cypher: cypher}} = cluster_info, state) do
     node_id_enc = node.id |> Utils.encode_human()
     Logger.debug("[#{node_id_enc}] << #{state.type}")
 
     payload = gen_request_msg(state.type, state)
-    payload = Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+    payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
     :gen_udp.send(state.socket, node.ip, node.port, payload)
 
     new_nodes =

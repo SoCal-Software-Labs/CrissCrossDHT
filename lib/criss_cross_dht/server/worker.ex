@@ -130,60 +130,25 @@ defmodule CrissCrossDHT.Server.Worker do
     {key, tid}
   end
 
-  def store_name(pid, cluster, private_rsa_key, value, local, remote, ttl) do
+  def store_name(pid, cluster, priv_key, value, local, remote, ttl) do
     tid = KRPCProtocol.gen_tid()
-    store_name(pid, cluster, private_rsa_key, value, local, remote, ttl, tid)
+    store_name(pid, cluster, priv_key, value, local, remote, ttl, tid)
   end
 
-  def store_name(pid, cluster, private_rsa_key, value, local, remote, ttl, tid) do
-    {:ok, public_key} = ExPublicKey.public_key_from_private_key(private_rsa_key)
-    {:ok, pem_string} = ExPublicKey.pem_encode(public_key)
-    public_key_hash = Utils.hash(pem_string)
+  def store_name(pid, cluster, priv_key, value, local, remote, ttl, tid) do
+    {:ok, public_key} = ExSchnorr.public_from_private(priv_key)
+    {:ok, key_string} = ExSchnorr.public_to_bytes(public_key)
+    public_key_hash = Utils.hash(key_string)
     name = Utils.hash(public_key_hash)
 
     :ok =
       GenServer.cast(
         pid,
-        {:store_name, cluster, private_rsa_key, pem_string, public_key_hash, name, value, local,
-         remote, ttl, tid}
+        {:store_name, cluster, priv_key, key_string, public_key_hash, name, value, local, remote,
+         ttl, tid}
       )
 
     {name, tid}
-  end
-
-  def get_public_key(cache, pid, storage_pid, cluster, key_hash, state) do
-    # TODO add cache
-    case :ets.lookup(cache, key_hash) do
-      [{_, key}] ->
-        {:ok, key}
-
-      _ ->
-        key_file =
-          case state.storage_mod.get_value(storage_pid, cluster, key_hash) do
-            nil ->
-              server_pid = pid
-              task = Task.async(fn -> find_value_sync(server_pid, cluster, key_hash) end)
-              Task.await(task)
-
-            key ->
-              key
-          end
-
-        case key_file do
-          s when is_binary(s) ->
-            case ExPublicKey.loads(s) do
-              {:ok, key} ->
-                :ets.insert(cache, {key_hash, key})
-                {:ok, key}
-
-              e ->
-                e
-            end
-
-          _ ->
-            {:error, "public key not found"}
-        end
-    end
   end
 
   def create_udp_socket(config, port, ip_vers) do
@@ -316,7 +281,7 @@ defmodule CrissCrossDHT.Server.Worker do
     Logger.debug("[*] >> store #{Utils.encode_human(tid)}")
 
     case state.cluster_config do
-      %{^cluster_header => %{private_key: rsa_priv_key} = cluster_secret}
+      %{^cluster_header => %{private_key: rsa_priv_key, cypher: cypher}}
       when not is_nil(rsa_priv_key) ->
         nodes =
           state.node_id
@@ -335,7 +300,7 @@ defmodule CrissCrossDHT.Server.Worker do
         ]
 
         payload = KRPCProtocol.encode(:store, args)
-        payload = Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+        payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
 
         for node <- CrissCrossDHT.Search.Worker.nodes_to_search_nodes(nodes) do
           :gen_udp.send(state.socket, node.ip, node.port, payload)
@@ -349,7 +314,7 @@ defmodule CrissCrossDHT.Server.Worker do
   end
 
   def handle_cast(
-        {:store_name, cluster_header, rsa_priv_name_key, pem_string, public_key_hash, name, value,
+        {:store_name, cluster_header, rsa_priv_name_key, key_string, public_key_hash, name, value,
          local, remote, ttl, tid},
         state
       ) do
@@ -357,7 +322,7 @@ defmodule CrissCrossDHT.Server.Worker do
     Logger.debug("[*] >> store_name")
 
     case state.cluster_config do
-      %{^cluster_header => %{private_key: rsa_priv_key} = cluster_secret}
+      %{^cluster_header => %{private_key: rsa_priv_key, cypher: cypher}}
       when not is_nil(rsa_priv_key) ->
         {:ok, signature} = Utils.sign(value, rsa_priv_key)
 
@@ -379,7 +344,7 @@ defmodule CrissCrossDHT.Server.Worker do
           value: value,
           ttl: ttl,
           public_key: public_key_hash,
-          pem_string: pem_string,
+          key_string: key_string,
           generation: generation,
           signature: signature,
           signature_ns: signature_ns
@@ -392,6 +357,7 @@ defmodule CrissCrossDHT.Server.Worker do
             name,
             value,
             generation,
+            key_string,
             signature_ns,
             ttl
           )
@@ -399,7 +365,7 @@ defmodule CrissCrossDHT.Server.Worker do
 
         if remote do
           payload = KRPCProtocol.encode(:store_name, args)
-          payload = Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+          payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
 
           nodes =
             state.node_id
@@ -579,8 +545,8 @@ defmodule CrissCrossDHT.Server.Worker do
         |> Utils.unwrap()
 
       case state.cluster_config do
-        %{^cluster_header => cluster_secret} ->
-          decrypted = Utils.decrypt(body, cluster_secret)
+        %{^cluster_header => %{cypher: cypher} = cluster_secret} ->
+          decrypted = Utils.decrypt(body, cypher)
 
           case decrypted do
             c when is_binary(c) ->
@@ -612,7 +578,14 @@ defmodule CrissCrossDHT.Server.Worker do
   # Error #
   #########
 
-  def handle_message({:error, error}, _socket, {cluster_header, cluster_secret}, ip, port, state) do
+  def handle_message(
+        {:error, error},
+        _socket,
+        {cluster_header, %{cypher: cypher}},
+        ip,
+        port,
+        state
+      ) do
     args = [code: error.code, msg: error.msg, tid: error.tid]
     payload = KRPCProtocol.encode(:error, args)
 
@@ -620,7 +593,7 @@ defmodule CrissCrossDHT.Server.Worker do
       state.socket,
       ip,
       port,
-      Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+      Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
     )
 
     {:noreply, state}
@@ -656,7 +629,7 @@ defmodule CrissCrossDHT.Server.Worker do
   def handle_message(
         {:find_node, remote},
         {socket, ip_vers},
-        {cluster_header, cluster_secret},
+        {cluster_header, %{cypher: cypher}},
         ip,
         port,
         state
@@ -693,7 +666,7 @@ defmodule CrissCrossDHT.Server.Worker do
       socket,
       ip,
       port,
-      Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+      Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
     )
 
     # end
@@ -705,7 +678,7 @@ defmodule CrissCrossDHT.Server.Worker do
   def handle_message(
         {:get_peers, remote},
         {socket, ip_vers},
-        {cluster_header, cluster_secret},
+        {cluster_header, %{cypher: cypher}},
         ip,
         port,
         state
@@ -748,7 +721,7 @@ defmodule CrissCrossDHT.Server.Worker do
       socket,
       ip,
       port,
-      Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+      Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
     )
 
     {:noreply, state}
@@ -758,7 +731,7 @@ defmodule CrissCrossDHT.Server.Worker do
   def handle_message(
         {:announce_peer, remote},
         {socket, ip_vers},
-        {cluster_header, cluster_secret},
+        {cluster_header, %{cypher: cypher} = cluster_secret},
         ip,
         port,
         state
@@ -807,7 +780,7 @@ defmodule CrissCrossDHT.Server.Worker do
         socket,
         ip,
         port,
-        Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+        Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
       )
 
       {:noreply, state}
@@ -818,7 +791,7 @@ defmodule CrissCrossDHT.Server.Worker do
   def handle_message(
         {:find_value, remote},
         {socket, ip_vers},
-        {cluster_header, cluster_secret},
+        {cluster_header, %{cypher: cypher}},
         ip,
         port,
         state
@@ -872,7 +845,7 @@ defmodule CrissCrossDHT.Server.Worker do
       socket,
       ip,
       port,
-      Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+      Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
     )
 
     {:noreply, state}
@@ -881,7 +854,7 @@ defmodule CrissCrossDHT.Server.Worker do
   def handle_message(
         {:find_name, remote},
         {socket, ip_vers},
-        {cluster_header, cluster_secret},
+        {cluster_header, %{cypher: cypher}},
         ip,
         port,
         state
@@ -917,7 +890,7 @@ defmodule CrissCrossDHT.Server.Worker do
 
           KRPCProtocol.encode(:find_name_nodes_reply, args)
 
-        {value, generation, signature} ->
+        {value, generation, key_string, signature} ->
           Logger.debug("[#{Utils.encode_human(remote.node_id)}] << find_name (value)")
 
           args = [
@@ -927,6 +900,7 @@ defmodule CrissCrossDHT.Server.Worker do
             value: value,
             generation: generation,
             signature: signature,
+            key_string: key_string,
             token: token
           ]
 
@@ -937,7 +911,7 @@ defmodule CrissCrossDHT.Server.Worker do
       socket,
       ip,
       port,
-      Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+      Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
     )
 
     {:noreply, state}
@@ -947,7 +921,7 @@ defmodule CrissCrossDHT.Server.Worker do
   def handle_message(
         {:store_name, remote},
         {socket, ip_vers},
-        {cluster_header, cluster_secret},
+        {cluster_header, %{cypher: cypher} = cluster_secret},
         ip,
         port,
         state
@@ -958,6 +932,7 @@ defmodule CrissCrossDHT.Server.Worker do
 
     hash_matches =
       Utils.hash(remote.public_key) == remote.name and
+        Utils.hash(Utils.hash(remote.key_string)) == remote.name and
         Utils.check_generation(
           state.storage_mod,
           state.storage_pid,
@@ -965,7 +940,7 @@ defmodule CrissCrossDHT.Server.Worker do
           remote.name,
           remote.generation
         ) and
-        case ExPublicKey.loads(remote.pem_string) do
+        case Utils.load_public_key(remote.key_string) do
           {:ok, public_key} ->
             Utils.verify_signature(
               %{public_key: public_key},
@@ -974,23 +949,19 @@ defmodule CrissCrossDHT.Server.Worker do
             )
 
           _ ->
-            Logger.warning(
-              "Could not found NameService public key, #{Utils.encode_human(remote.public_key)}"
-            )
-
             false
         end
 
     payload =
       if hash_matches and valid_signature do
         ## Get pid of the storage genserver
-
         state.storage_mod.put_name(
           state.storage_pid,
           cluster_header,
           remote.name,
           remote.value,
           remote.generation,
+          remote.key_string,
           remote.signature_ns,
           remote.ttl
         )
@@ -1009,7 +980,7 @@ defmodule CrissCrossDHT.Server.Worker do
       socket,
       ip,
       port,
-      Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+      Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
     )
 
     {:noreply, state}
@@ -1018,7 +989,7 @@ defmodule CrissCrossDHT.Server.Worker do
   def handle_message(
         {:store, remote},
         {socket, ip_vers},
-        {cluster_header, cluster_secret},
+        {cluster_header, %{cypher: cypher} = cluster_secret},
         ip,
         port,
         state
@@ -1052,7 +1023,7 @@ defmodule CrissCrossDHT.Server.Worker do
       socket,
       ip,
       port,
-      Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+      Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
     )
 
     {:noreply, state}
@@ -1072,7 +1043,7 @@ defmodule CrissCrossDHT.Server.Worker do
   def handle_message(
         {:find_node_reply, remote},
         {socket, ip_vers},
-        {cluster_header, cluster_secret},
+        {cluster_header, %{cypher: cypher}},
         ip,
         port,
         state
@@ -1099,7 +1070,7 @@ defmodule CrissCrossDHT.Server.Worker do
 
     ## Ping all nodes
     payload = KRPCProtocol.encode(:ping, node_id: state.node_id)
-    payload = Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+    payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
 
     Enum.each(remote.nodes, fn node_tuple ->
       {_id, ip, port} = node_tuple
@@ -1259,14 +1230,32 @@ defmodule CrissCrossDHT.Server.Worker do
       {socket, ip_vers}
     )
 
-    tid_enc = Utils.encode_human(remote.tid)
+    valid_signature =
+      Utils.hash(Utils.hash(remote.key_string)) == remote.name and
+        case Utils.load_public_key(remote.key_string) do
+          {:ok, public_key} ->
+            Utils.verify_signature(
+              %{public_key: public_key},
+              Utils.combine_to_sign([remote.generation, remote.signature]),
+              remote.signature_ns
+            )
 
-    case CrissCrossDHT.Registry.get_pid(state.node_id_enc, SearchName, tid_enc) do
-      nil ->
-        Logger.debug("[#{Utils.encode_human(remote.node_id)}] ignore unknown tid: #{tid_enc} ")
+          _ ->
+            false
+        end
 
-      pid ->
-        SearchName.handle_reply(pid, remote, remote.name, remote.value, remote.generation)
+    if valid_signature do
+      tid_enc = Utils.encode_human(remote.tid)
+
+      case CrissCrossDHT.Registry.get_pid(state.node_id_enc, SearchName, tid_enc) do
+        nil ->
+          Logger.debug("[#{Utils.encode_human(remote.node_id)}] ignore unknown tid: #{tid_enc} ")
+
+        pid ->
+          SearchName.handle_reply(pid, remote, remote.name, remote.value, remote.generation)
+      end
+    else
+      Logger.error("Invalid signature for name reply.")
     end
 
     {:noreply, state}
@@ -1420,7 +1409,7 @@ defmodule CrissCrossDHT.Server.Worker do
     end
   end
 
-  defp send_ping_reply(node_id, tid, {cluster_header, cluster_secret}, ip, port, socket) do
+  defp send_ping_reply(node_id, tid, {cluster_header, %{cypher: cypher}}, ip, port, socket) do
     Logger.debug("[#{Utils.encode_human(node_id)}] << ping_reply")
 
     payload = KRPCProtocol.encode(:ping_reply, tid: tid, node_id: node_id)
@@ -1429,7 +1418,7 @@ defmodule CrissCrossDHT.Server.Worker do
       socket,
       ip,
       port,
-      Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+      Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
     )
   end
 

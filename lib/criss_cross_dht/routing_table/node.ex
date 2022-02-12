@@ -176,11 +176,11 @@ defmodule CrissCrossDHT.RoutingTable.Node do
   # Queries #
   ###########
 
-  def handle_cast({:send_ping, cluster_header, cluster_secret}, state) do
+  def handle_cast({:send_ping, cluster_header, %{cypher: cypher}}, state) do
     Logger.debug("[#{Utils.encode_human(state.node_id)}] << ping")
 
     payload = KRPCProtocol.encode(:ping, node_id: state.own_node_id)
-    payload = Utils.wrap(cluster_header, Utils.encrypt(cluster_secret, payload))
+    payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
     :gen_udp.send(state.socket, state.ip, state.port, payload)
 
     {:noreply, %{state | :last_query_snd => :os.system_time(:millisecond)}}

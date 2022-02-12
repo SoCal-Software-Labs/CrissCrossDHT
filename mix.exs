@@ -16,7 +16,6 @@ defmodule CrissCrossDHT.Mixfile do
 
   def application do
     [
-      # mod: {CrissCrossDHT, []},
       applications: [:logger]
     ]
   end
@@ -25,6 +24,7 @@ defmodule CrissCrossDHT.Mixfile do
     [
       {:b58, "~> 1.0.2"},
       {:krpc_protocol, path: "../krpc_protocol"},
+      {:ex_schnorr, path: "../ex_schnorr"},
       {:ex_doc, "~> 0.19", only: :dev},
       {:pretty_hex, "~> 0.0.1", only: :dev},
       {:dialyxir, "~> 0.5.1", only: [:dev, :test]},

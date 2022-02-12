@@ -11,6 +11,7 @@ defmodule CrissCrossDHT.Server.Utils do
     "127.0.0.1:6881"
   """
   @aad "AES256GCM"
+  @schnorr_context "CrissCross-DHT"
 
   alias CrissCrossDHT.Server.Storage
 
@@ -45,6 +46,18 @@ defmodule CrissCrossDHT.Server.Utils do
     hash(s)
   end
 
+  def gen_cypher do
+    :rand.seed(:exs64, :os.timestamp())
+
+    s =
+      Stream.repeatedly(fn -> :rand.uniform(255) end)
+      |> Enum.take(40)
+      |> :binary.list_to_bin()
+
+    hash(s)
+  end
+
+  @compile {:inline, hash: 1}
   def hash(s), do: :crypto.hash(:sha3_256, s)
 
   @doc """
@@ -92,7 +105,7 @@ defmodule CrissCrossDHT.Server.Utils do
       pub_key =
         case config do
           %{public_key: pub} when not is_nil(pub) ->
-            {:ok, pub_key} = ExPublicKey.loads(pub)
+            {:ok, pub_key} = load_public_key(decode_human!(pub))
             pub_key
 
           _ ->
@@ -102,7 +115,7 @@ defmodule CrissCrossDHT.Server.Utils do
       priv_key =
         case config do
           %{private_key: priv} when not is_nil(priv) ->
-            {:ok, priv_key} = ExPublicKey.loads(priv)
+            {:ok, priv_key} = load_private_key(decode_human!(priv))
             priv_key
 
           _ ->
@@ -125,18 +138,18 @@ defmodule CrissCrossDHT.Server.Utils do
 
   def config(config, value, ret \\ nil), do: Map.get(config, value, ret)
 
-  def encrypt(%{cypher: secret}, payload) do
+  def encrypt(secret, payload) do
     do_encrypt(payload, secret)
   end
 
-  def decrypt(payload, %{cypher: secret}) do
+  def decrypt(payload, secret) do
     do_decrypt(payload, secret)
   end
 
   def verify_signature(%{public_key: nil}, value, signature), do: false
 
-  def verify_signature(%{public_key: rsa_pub_key}, msg, signature) do
-    case ExPublicKey.verify(msg, signature, rsa_pub_key) do
+  def verify_signature(%{public_key: pub_key}, msg, signature) do
+    case ExSchnorr.verify(pub_key, msg, signature, @schnorr_context) do
       {:ok, true} ->
         true
 
@@ -145,8 +158,8 @@ defmodule CrissCrossDHT.Server.Utils do
     end
   end
 
-  def sign(msg, rsa_priv_key) do
-    ExPublicKey.sign(msg, rsa_priv_key)
+  def sign(msg, priv_key) do
+    ExSchnorr.sign(priv_key, msg, @schnorr_context)
   end
 
   defp do_encrypt(val, key) do
@@ -185,9 +198,9 @@ defmodule CrissCrossDHT.Server.Utils do
     |> Enum.join(".")
   end
 
-  def name_from_private_rsa_key(rsa_priv_key) do
-    {:ok, rsa_pub_key} = ExPublicKey.public_key_from_private_key(rsa_priv_key)
-    {:ok, encoded} = ExPublicKey.pem_encode(rsa_pub_key)
+  def name_from_private_rsa_key(priv_key) do
+    {:ok, pub_key} = ExSchnorr.public_from_private(priv_key)
+    {:ok, encoded} = ExSchnorr.public_to_bytes(pub_key)
     hash(hash(encoded))
   end
 
@@ -196,5 +209,13 @@ defmodule CrissCrossDHT.Server.Utils do
       {value, saved_gen} -> saved_gen < generation
       _ -> true
     end
+  end
+
+  def load_public_key(s) do
+    ExSchnorr.public_from_bytes(s)
+  end
+
+  def load_private_key(s) do
+    ExSchnorr.private_from_bytes(s)
   end
 end
