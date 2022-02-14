@@ -77,6 +77,10 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
     GenServer.call(name, {:get, node_id})
   end
 
+  def get_by_ip(name, ip_tuple) do
+    GenServer.call(name, {:get_by_ip, ip_tuple})
+  end
+
   def closest_nodes(name, target, remote_node_id) do
     GenServer.call(name, {:closest_nodes, target, remote_node_id})
   end
@@ -113,6 +117,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
 
     ## Generate name of the ets cache table from the node_id as an atom
     ets_name = node_id |> Utils.encode_human() |> String.to_atom()
+    ets_name_ip = ("cache" <> node_id) |> Utils.encode_human() |> String.to_atom()
 
     {:ok,
      %{
@@ -121,6 +126,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
        rt_name: rt_name,
        buckets: [Bucket.new(0)],
        cache: :ets.new(ets_name, [:set, :protected]),
+       cache_ip: :ets.new(ets_name_ip, [:set, :protected]),
        cluster: cluster,
        cluster_secret: cluster_secret,
        ip_tuple: ip_tuple
@@ -136,7 +142,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
       Enum.map(state.buckets, fn bucket ->
         Bucket.filter(bucket, fn pid ->
           Node.last_time_responded(pid)
-          |> evaluate_node(state.cache, state.cluster, state.cluster_secret, pid)
+          |> evaluate_node(state.cache, state.cache_ip, state.cluster, state.cluster_secret, pid)
         end)
       end)
 
@@ -207,8 +213,12 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
     {:reply, list, state}
   end
 
+  def handle_call({:get_by_ip, ip_tuple}, _from, state) do
+    {:reply, get_node_ip(state.cache_ip, ip_tuple), state}
+  end
+
   @doc """
-  This functiowe will ren returns the pid for a specific node id. If the node
+  This functio returns the pid for a specific node id. If the node
   does not exists, it will try to add it to our routing table. Again, if this
   was successful, this function returns the pid, otherwise nil.
   """
@@ -255,7 +265,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   This function deletes a node according to its node id.
   """
   def handle_call({:del, node_id}, _from, state) do
-    new_bucket = del_node(state.cache, state.buckets, node_id)
+    new_bucket = del_node(state.cache, state.cache_ip, state.buckets, node_id)
     {:reply, :ok, %{state | :buckets => new_bucket}}
   end
 
@@ -314,7 +324,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   # Private Functions #
   #####################
 
-  def evaluate_node(time, cache, header, cluster_secret, pid) do
+  def evaluate_node(time, cache, cache_ip, header, cluster_secret, pid) do
     cond do
       time < @response_time ->
         Node.send_ping(pid, header, cluster_secret)
@@ -328,6 +338,8 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
       time >= @response_time and Node.is_questionable?(pid) ->
         Logger.debug("[#{Utils.encode_human(Node.id(pid))}] Deleted")
         :ets.delete(cache, Node.id(pid))
+        {_, ip, port} = Node.to_tuple(pid)
+        :ets.delete(cache_ip, {ip, port})
         Node.stop(pid)
         false
     end
@@ -362,7 +374,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   This function adds a new node to our routing table.
   """
   def add_node(state, node_tuple) do
-    {node_id, _ip_port, _socket} = node_tuple
+    {node_id, ip_port, socket} = node_tuple
 
     my_node_id = state.node_id
     buckets = state.buckets
@@ -387,6 +399,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
         new_bucket = Bucket.add(bucket, pid)
 
         :ets.insert(state.cache, {node_id, pid})
+        :ets.insert(state.cache_ip, {ip_port, pid})
         state |> Map.put(:buckets, List.replace_at(buckets, index, new_bucket))
 
       ## If the bucket is full and the node would belong to a bucket that is far
@@ -474,7 +487,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   @doc """
   TODO
   """
-  def del_node(cache, buckets, node_id) do
+  def del_node(cache, cache_ip, buckets, node_id) do
     {_id, node_pid} = :ets.lookup(cache, node_id) |> Enum.at(0)
 
     ## Delete node from the bucket list
@@ -488,6 +501,8 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
 
     ## Delete node from the ETS cache
     :ets.delete(cache, node_id)
+    {_, ip, port} = Node.to_tuple(node_pid)
+    :ets.delete(cache_ip, {ip, port})
 
     new_buckets
   end
@@ -497,6 +512,13 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   """
   def get_node(cache, node_id) do
     case :ets.lookup(cache, node_id) do
+      [{_node_id, pid}] -> pid
+      [] -> nil
+    end
+  end
+
+  def get_node_ip(cache_ip, ip_tuple) do
+    case :ets.lookup(cache_ip, ip_tuple) do
       [{_node_id, pid}] -> pid
       [] -> nil
     end

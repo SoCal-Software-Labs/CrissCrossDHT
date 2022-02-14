@@ -58,7 +58,10 @@ defmodule CrissCrossDHT.Server.Utils do
   end
 
   @compile {:inline, hash: 1}
-  def hash(s), do: :crypto.hash(:sha3_256, s)
+  def hash(s) do
+    {:ok, hash} = Multihash.encode(:blake2b, :crypto.hash(:blake2b, s))
+    hash
+  end
 
   @doc """
   TODO
@@ -109,7 +112,7 @@ defmodule CrissCrossDHT.Server.Utils do
             pub_key
 
           _ ->
-            nil
+            raise "Cluster #{k} configured without public key"
         end
 
       priv_key =
@@ -131,7 +134,17 @@ defmodule CrissCrossDHT.Server.Utils do
             raise "Cluster #{k} configured without secret"
         end
 
-      {decode_human!(k), %{cypher: cypher, public_key: pub_key, private_key: priv_key}}
+      max_ttl =
+        case config do
+          %{max_ttl: max_ttl} when is_number(max_ttl) and max_ttl >= -1 ->
+            max_ttl
+
+          _ ->
+            raise "Cluster #{k} configured without max_ttl"
+        end
+
+      {decode_human!(k),
+       %{max_ttl: max_ttl, cypher: cypher, public_key: pub_key, private_key: priv_key}}
     end)
     |> Enum.into(%{})
   end
@@ -217,5 +230,15 @@ defmodule CrissCrossDHT.Server.Utils do
 
   def load_private_key(s) do
     ExSchnorr.private_from_bytes(s)
+  end
+
+  def check_ttl(%{max_ttl: -1}, _), do: true
+  def check_ttl(%{max_ttl: mx}, ttl), do: adjust_ttl(mx) >= ttl
+
+  def adjust_ttl(ttl) do
+    case ttl do
+      -1 -> -1
+      _ -> :os.system_time(:millisecond) + ttl
+    end
   end
 end
