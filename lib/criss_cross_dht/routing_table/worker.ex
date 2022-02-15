@@ -397,7 +397,6 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
           |> DynamicSupervisor.start_child(node_child)
 
         new_bucket = Bucket.add(bucket, pid)
-
         :ets.insert(state.cache, {node_id, pid})
         :ets.insert(state.cache_ip, {ip_port, pid})
         state |> Map.put(:buckets, List.replace_at(buckets, index, new_bucket))

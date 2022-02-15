@@ -54,13 +54,20 @@ defmodule CrissCrossDHT.Server.Utils do
       |> Enum.take(40)
       |> :binary.list_to_bin()
 
-    hash(s)
+    # hash(s)
+    :crypto.hash(:sha3_256, s)
   end
 
   @compile {:inline, hash: 1}
   def hash(s) do
-    {:ok, hash} = Multihash.encode(:blake2b, :crypto.hash(:blake2b, s))
-    hash
+    size = byte_size(s)
+
+    if size < 31 do
+      <<0x01, 32::integer-size(8), size>> <> String.ljust(s, 31, ?-)
+    else
+      {:ok, hash} = Multihash.encode(:blake2s, :crypto.hash(:blake2s, s))
+      hash
+    end
   end
 
   @doc """
@@ -193,7 +200,7 @@ defmodule CrissCrossDHT.Server.Utils do
     ["0A", header, body]
   end
 
-  def unwrap("0A" <> <<cluster_header::binary-size(32), body::binary>>) do
+  def unwrap("0A" <> <<cluster_header::binary-size(34), body::binary>>) do
     {cluster_header, body}
   end
 
@@ -233,7 +240,7 @@ defmodule CrissCrossDHT.Server.Utils do
   end
 
   def check_ttl(%{max_ttl: -1}, _), do: true
-  def check_ttl(%{max_ttl: mx}, ttl), do: adjust_ttl(mx) >= ttl
+  def check_ttl(%{max_ttl: mx}, ttl), do: adjust_ttl(mx) + 60_000 >= ttl
 
   def adjust_ttl(ttl) do
     case ttl do

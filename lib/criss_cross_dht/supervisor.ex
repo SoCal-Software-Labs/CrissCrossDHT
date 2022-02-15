@@ -11,7 +11,7 @@ defmodule CrissCrossDHT.Supervisor do
 
   def children(node_id: node_id, config: config, worker_name: worker_name) do
     node_id_enc = node_id |> Utils.encode_human()
-    Logger.debug("Node-ID: #{node_id_enc}")
+    Logger.info("Node-ID: #{node_id_enc}")
 
     {storage_mod, storage_opts} =
       case Map.get(config, :storage) do

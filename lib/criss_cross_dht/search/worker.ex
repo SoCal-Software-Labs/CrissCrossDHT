@@ -104,6 +104,7 @@ defmodule CrissCrossDHT.Search.Worker do
       ## Send queries to the 3 closest nodes
       new_state =
         state.nodes
+        |> nodesinspector()
         |> Distance.closest_nodes(state.target)
         |> Enum.filter(fn x ->
           x.responded == false and
@@ -121,7 +122,7 @@ defmodule CrissCrossDHT.Search.Worker do
   end
 
   def nodesinspector(nodes) do
-    # Logger.error "#{inspect nodes}"
+    # Logger.error("#{inspect(nodes)}")
     nodes
   end
 

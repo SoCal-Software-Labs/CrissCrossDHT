@@ -23,12 +23,13 @@ defmodule CrissCrossDHT.Mixfile do
   defp deps do
     [
       {:b58, "~> 1.0.2"},
-      {:ex_schnorr, github: "hansonkd/ex_schnorr"},
+      {:ex_schnorr,
+       github: "hansonkd/ex_schnorr", ref: "c1aedaa7f38d5df49b76c4e04cfd8c666732deea"},
       {:ex_doc, "~> 0.19", only: :dev},
       {:pretty_hex, "~> 0.0.1", only: :dev},
       {:dialyxir, "~> 0.5.1", only: [:dev, :test]},
-      {:ex_crypto, "~> 0.10.0"},
-      {:ex_multihash, "~> 2.0"}
+      {:ex_multihash, "~> 2.0"},
+      {:xxh3, "~> 0.3.2"}
     ]
   end
 

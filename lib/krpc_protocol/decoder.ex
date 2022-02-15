@@ -332,11 +332,11 @@ defmodule KRPCProtocol.Decoder do
 
   ## This function checks for common error.
   defp check_errors(msg) do
-    if Map.has_key?(msg, :a) and byte_size(msg[:a][:id]) != 32 do
+    if Map.has_key?(msg, :a) and byte_size(msg[:a][:id]) != 34 do
       raise "Invalid node id size: #{byte_size(msg[:a][:id])}"
     end
 
-    if Map.has_key?(msg, :r) and byte_size(msg[:r][:id]) != 32 do
+    if Map.has_key?(msg, :r) and byte_size(msg[:r][:id]) != 34 do
       raise "Invalid node id size: #{byte_size(msg[:r][:id])}"
     end
 
