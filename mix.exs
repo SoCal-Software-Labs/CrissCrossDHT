@@ -5,7 +5,7 @@ defmodule CrissCrossDHT.Mixfile do
     [
       app: :crisscrossdht,
       version: "0.0.3",
-      elixir: "~> 1.2",
+      elixir: "~> 1.12",
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
       description: description(),
@@ -16,7 +16,7 @@ defmodule CrissCrossDHT.Mixfile do
 
   def application do
     [
-      applications: [:logger]
+      extra_applications: [:logger]
     ]
   end
 
@@ -28,8 +28,7 @@ defmodule CrissCrossDHT.Mixfile do
       {:ex_doc, "~> 0.19", only: :dev},
       {:pretty_hex, "~> 0.0.1", only: :dev},
       {:dialyxir, "~> 0.5.1", only: [:dev, :test]},
-      {:ex_multihash, "~> 2.0"},
-      {:xxh3, "~> 0.3.2"}
+      {:ex_multihash, "~> 2.0"}
     ]
   end
 
