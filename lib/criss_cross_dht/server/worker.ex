@@ -163,16 +163,13 @@ defmodule CrissCrossDHT.Server.Worker do
   end
 
   def create_udp_socket(config, port, ip_vers) do
-    ip_addr = ip_vers |> to_string() |> Kernel.<>("_addr") |> String.to_atom()
+    ip_addr = ip_vers |> to_string() |> Kernel.<>("_bind_addr") |> String.to_atom()
     bind_ip = Utils.config(config, ip_addr, {127, 0, 0, 1})
     options = ip_vers |> inet_option() |> maybe_put(:ip, bind_ip)
 
     case :gen_udp.open(port, options ++ [{:active, true}]) do
       {:ok, socket} ->
         Logger.debug("Init DHT Node (#{ip_vers})")
-
-        foo = :inet.getopts(socket, [:ipv6_v6only])
-        Logger.debug("Options: #{inspect(foo)}")
 
         {socket, bind_ip}
 
