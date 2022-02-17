@@ -28,7 +28,7 @@ defmodule CrissCrossDHT.Mixfile do
       {:pretty_hex, "~> 0.0.1", only: :dev},
       {:dialyxir, "~> 0.5.1", only: [:dev, :test]},
       {:ex_multihash, "~> 2.0"},
-      {:sorted_set_kv, "~> 0.1.1"},
+      {:sorted_set_kv, "~> 0.1.2"},
       {:redix, "~> 1.1"}
     ]
   end
