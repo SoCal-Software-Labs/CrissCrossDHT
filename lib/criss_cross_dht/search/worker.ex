@@ -17,7 +17,6 @@ defmodule CrissCrossDHT.Search.Worker do
 
   alias CrissCrossDHT.RoutingTable.Distance
   alias CrissCrossDHT.Search.Node
-  alias CrissCrossDHT.Server.Worker
   alias CrissCrossDHT.Server.Utils
 
   ##############

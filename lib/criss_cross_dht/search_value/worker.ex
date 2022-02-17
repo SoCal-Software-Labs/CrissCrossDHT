@@ -17,7 +17,6 @@ defmodule CrissCrossDHT.SearchValue.Worker do
 
   alias CrissCrossDHT.RoutingTable.Distance
   alias CrissCrossDHT.Search.Node
-  alias CrissCrossDHT.Server.Worker
   alias CrissCrossDHT.Server.Utils
 
   ##############
@@ -90,7 +89,7 @@ defmodule CrissCrossDHT.SearchValue.Worker do
     {:stop, :normal, state}
   end
 
-  def handle_info({:search_iterate, {cluster_header, cluster_secret} = cluster_info}, state) do
+  def handle_info({:search_iterate, cluster_info}, state) do
     if state.completed or search_completed?(state.nodes, state.target) do
       Logger.debug("SearchValue is complete")
 

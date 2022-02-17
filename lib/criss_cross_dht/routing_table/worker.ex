@@ -374,7 +374,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   This function adds a new node to our routing table.
   """
   def add_node(state, node_tuple) do
-    {node_id, ip_port, socket} = node_tuple
+    {node_id, ip_port, _socket} = node_tuple
 
     my_node_id = state.node_id
     buckets = state.buckets

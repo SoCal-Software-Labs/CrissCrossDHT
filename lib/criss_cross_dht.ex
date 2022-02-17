@@ -1,6 +1,4 @@
 defmodule CrissCrossDHT do
-  use Application
-
   require Logger
 
   alias CrissCrossDHT.Server.Utils, as: Utils
@@ -41,48 +39,14 @@ defmodule CrissCrossDHT do
   @typedoc """
   TODO
   """
-  @type node_id :: <<_::20>>
+  @type node_id :: <<_::34>>
 
   @typedoc """
   TODO
   """
   @type node_id_enc :: String.t()
 
-  @cypher "DEoGUJcJCMKVuHXAmjgNyU6cCrPcHFymd6c7o5i9yVzT"
-  @public_key "2bDkyNhW9LBQH3TB1inDAppeHnbwLbpMTGaZ3ZoD5NzpjQRK24uEnLU"
-  @private_key "wnpv357S2Qtfv89FiHJAaBiiyPSQF86Vx3cpH5jRF8brjGYfegRW7YhdeaitiQfaBYSRR9VwGPiRoAFACNJ8cYbC8RTMyRshZv"
-
-  @cluster_name Utils.encode_human(Utils.hash(Utils.combine_to_sign([@cypher, @public_key])))
-
   @process_name CrissCrossDHT.Server.Worker
-
-  @doc false
-  def start(_type, _args) do
-    CrissCrossDHT.Registry.start()
-
-    config = %{
-      port: System.get_env("PORT", "3000") |> String.to_integer(),
-      ipv4: true,
-      ipv6: false,
-      clusters: %{
-        @cluster_name => %{secret: @cypher, public_key: @public_key, private_key: @private_key}
-      },
-      bootstrap_nodes: [
-        %{node_id: "8thbnFn4HZ24vVojR5qV6jsLCoqMaeBAVSxioBLmzGzC", host: "localhost", port: 3000}
-      ],
-      k_bucket_size: 8,
-      storage: {CrissCrossDHT.Server.Storage, []}
-    }
-
-    Logger.debug("Cluster: #{@cluster_name}")
-    ## Start the main supervisor
-    CrissCrossDHT.Supervisor.start_link(
-      node_id: @node_id,
-      worker_name: @process_name,
-      config: config,
-      name: CrissCrossDHT.Registry.via(@node_id_enc, CrissCrossDHT.Supervisor)
-    )
-  end
 
   def store(cluster, value, ttl) do
     CrissCrossDHT.Server.Worker.store(@process_name, cluster, value, ttl)

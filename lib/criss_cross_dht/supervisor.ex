@@ -13,11 +13,7 @@ defmodule CrissCrossDHT.Supervisor do
     node_id_enc = node_id |> Utils.encode_human()
     Logger.info("Node-ID: #{node_id_enc}")
 
-    {storage_mod, storage_opts} =
-      case Map.get(config, :storage) do
-        nil -> {CrissCrossDHT.Server.Storage, []}
-        {storage_mod, storage_opts} -> {storage_mod, storage_opts}
-      end
+    {storage_mod, storage_opts} = Map.get(config, :storage)
 
     config = Map.put(config, :storage, {storage_mod, storage_opts})
 
