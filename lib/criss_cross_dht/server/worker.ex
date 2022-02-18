@@ -25,6 +25,8 @@ defmodule CrissCrossDHT.Server.Worker do
 
   @bootstrap_cluster_interval 60 * 1000
 
+  @max_stored_bytesize 64
+
   def start_link(opts) do
     GenServer.start_link(__MODULE__, [node_id: opts[:node_id], config: opts[:config]],
       name: opts[:name]
@@ -189,7 +191,6 @@ defmodule CrissCrossDHT.Server.Worker do
       raise "Configuration failure: Either ipv4 or ipv6 has to be set to true."
     end
 
-    cfg_cluster = Utils.config(config, :clusters)
     cfg_port = Utils.config(config, :port)
     {storage_mod, _} = Utils.config(config, :storage)
     process_values_callback = Utils.config(config, :process_values_callback)
@@ -200,12 +201,12 @@ defmodule CrissCrossDHT.Server.Worker do
     {socket6, socket6_ip} =
       if cfg_ipv6_is_enabled?, do: create_udp_socket(config, cfg_port, :ipv6), else: {nil, nil}
 
-    ## Change secret of the token every 5 minutes
     Process.send_after(self(), :cluster_secret, @time_cluster_secret)
     Process.send_after(self(), :reannounce, @reannounce_interval)
     Process.send_after(self(), :process_values, @process_values_interval)
-    Process.send_after(self(), :bootstrap_clusters, 2_000)
-    Process.send_after(self(), :bootstrap_clusters, 10_000)
+    Process.send_after(self(), {:bootstrap_clusters, false}, 2_000)
+    Process.send_after(self(), {:bootstrap_clusters, false}, 10_000)
+    Process.send_after(self(), {:bootstrap_clusters, true}, 45_000)
 
     cache = :ets.new(:key_cache, [:set, :public])
     storage_pid = node_id |> Utils.encode_human() |> Registry.get_pid(Storage)
@@ -217,7 +218,7 @@ defmodule CrissCrossDHT.Server.Worker do
       socket6: socket6,
       old_secret: nil,
       secret: Utils.gen_secret(),
-      cluster_config: cfg_cluster,
+      cluster_mod: CrissCrossDHT.ClusterWatcher,
       config: config,
       self_pid: self(),
       cache: cache,
@@ -228,39 +229,8 @@ defmodule CrissCrossDHT.Server.Worker do
       bootstrap_overlay: config.bootstrap_overlay
     }
 
-    # INFO Setup routingtable for IPv4
-    if cfg_ipv4_is_enabled? do
-      for {cluster_header, cluster_secret} <- state.cluster_config do
-        start_rtable(node_id, cluster_header, cluster_secret, :ipv4, {socket_ip, cfg_port})
-      end
-
-      if Utils.config(config, :bootstrap_nodes) do
-        bootstrap(state, {socket, :inet})
-      end
-    end
-
+    send(self(), {:start_rtable, socket_ip, cfg_port})
     {:ok, state}
-  end
-
-  defp start_rtable(node_id, header, cluster_secret, rt_ident, ip_tuple) do
-    node_id_enc = node_id |> Utils.encode_human()
-    rt_name = Utils.encode_human(header) <> to_string(rt_ident)
-
-    ## Allows giving atoms as rt_name to this function, e.g. :ipv4
-    {:ok, _pid} =
-      node_id_enc
-      |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.RoutingTable.Supervisor)
-      |> DynamicSupervisor.start_child({
-        CrissCrossDHT.RoutingTable.Supervisor,
-        node_id: node_id,
-        ip_tuple: ip_tuple,
-        node_id_enc: node_id_enc,
-        cluster: header,
-        cluster_secret: cluster_secret,
-        rt_name: rt_name
-      })
-
-    node_id |> get_rtable(header, rt_ident)
   end
 
   defp get_rtable(node_id, header, rt_ident) do
@@ -286,8 +256,8 @@ defmodule CrissCrossDHT.Server.Worker do
     # TODO What about ipv6?
     Logger.debug("[*] >> store #{Utils.encode_human(tid)}")
 
-    case state.cluster_config do
-      %{^cluster_header => %{private_key: private_key, cypher: cypher}}
+    case state.cluster_mod.get_cluster(cluster_header) do
+      %{private_key: private_key, cypher: cypher}
       when not is_nil(private_key) ->
         nodes =
           state.node_id
@@ -337,8 +307,8 @@ defmodule CrissCrossDHT.Server.Worker do
       signature_ns: signature_name
     ]
 
-    case state.cluster_config do
-      %{^cluster_header => %{cypher: cypher}} ->
+    case state.cluster_mod.get_cluster(cluster_header) do
+      %{cypher: cypher} ->
         payload = KRPCProtocol.encode(:store_name, args)
         payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
 
@@ -366,8 +336,8 @@ defmodule CrissCrossDHT.Server.Worker do
     # TODO What about ipv6?
     Logger.debug("[*] >> store_name")
 
-    case state.cluster_config do
-      %{^cluster_header => %{private_key: rsa_priv_key, cypher: cypher} = cluster_secret}
+    case state.cluster_mod.get_cluster(cluster_header) do
+      %{private_key: rsa_priv_key, cypher: cypher} = cluster_secret
       when not is_nil(rsa_priv_key) ->
         {:ok, signature} = Utils.sign(value, rsa_priv_key)
 
@@ -431,7 +401,7 @@ defmodule CrissCrossDHT.Server.Worker do
           state.socket,
           state.node_id,
           state.ip_tuple,
-          state.cluster_config
+          state.cluster_mod.get_cluster(cluster)
         )
         |> CrissCrossDHT.SearchName.Worker.find_name(
           cluster,
@@ -459,7 +429,7 @@ defmodule CrissCrossDHT.Server.Worker do
       state.socket,
       state.node_id,
       state.ip_tuple,
-      state.cluster_config
+      state.cluster_mod.get_cluster(cluster)
     )
     |> CrissCrossDHT.SearchValue.Worker.find_value(
       cluster,
@@ -490,7 +460,7 @@ defmodule CrissCrossDHT.Server.Worker do
       state.socket,
       state.node_id,
       state.ip_tuple,
-      state.cluster_config
+      state.cluster_mod.get_cluster(cluster)
     )
     |> Search.get_peers(
       cluster,
@@ -531,7 +501,7 @@ defmodule CrissCrossDHT.Server.Worker do
       state.socket,
       state.node_id,
       state.ip_tuple,
-      state.cluster_config
+      state.cluster_mod.get_cluster(cluster)
     )
     |> Search.get_peers(
       cluster,
@@ -572,7 +542,7 @@ defmodule CrissCrossDHT.Server.Worker do
       state.socket,
       state.node_id,
       state.ip_tuple,
-      state.cluster_config
+      state.cluster_mod.get_cluster(cluster)
     )
     |> Search.get_peers(
       cluster,
@@ -612,12 +582,15 @@ defmodule CrissCrossDHT.Server.Worker do
     {:noreply, state}
   end
 
-  def handle_info(:bootstrap_clusters, state) do
+  def handle_info({:bootstrap_clusters, do_again}, state) do
     Logger.debug("Searching for new nodes for clusters")
     worker_pid = self()
 
     Task.start(fn ->
-      for {cluster_header, _} <- Map.delete(state.cluster_config, state.bootstrap_overlay) do
+      bootstrap(state, {state.socket, :inet})
+
+      for {cluster_header, _} <-
+            Map.delete(state.cluster_mod.get_clusters(), state.bootstrap_overlay) do
         ## Start a find_node search to collect neighbors for our routing table
         rtable = state.node_id |> get_rtable(state.bootstrap_overlay, :ipv4)
 
@@ -644,7 +617,7 @@ defmodule CrissCrossDHT.Server.Worker do
               state.socket,
               state.node_id,
               state.ip_tuple,
-              state.cluster_config
+              state.cluster_mod.get_cluster(state.bootstrap_overlay)
             )
             |> Search.get_peers(
               state.bootstrap_overlay,
@@ -694,15 +667,46 @@ defmodule CrissCrossDHT.Server.Worker do
           state.socket,
           state.node_id,
           state.ip_tuple,
-          state.cluster_config
+          state.cluster_mod.get_cluster(cluster_header)
         )
         |> Search.find_node(cluster_header, target: state.node_id, start_nodes: bootstrap_nodes)
       end
 
-      Process.send_after(worker_pid, :bootstrap_clusters, @bootstrap_cluster_interval)
+      if do_again do
+        Process.send_after(worker_pid, {:bootstrap_clusters, true}, @bootstrap_cluster_interval)
+      end
     end)
 
     {:noreply, state}
+  end
+
+  def handle_info({:start_rtable, socket_ip, cfg_port}, state) do
+    for {cluster_header, cluster_secret} <- state.cluster_mod.get_clusters() do
+      start_rtable(state.node_id, cluster_header, cluster_secret, :ipv4, {socket_ip, cfg_port})
+    end
+
+    {:noreply, state}
+  end
+
+  defp start_rtable(node_id, header, cluster_secret, rt_ident, ip_tuple) do
+    node_id_enc = node_id |> Utils.encode_human()
+    rt_name = Utils.encode_human(header) <> to_string(rt_ident)
+
+    ## Allows giving atoms as rt_name to this function, e.g. :ipv4
+    {:ok, _pid} =
+      node_id_enc
+      |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.RoutingTable.Supervisor)
+      |> DynamicSupervisor.start_child({
+        CrissCrossDHT.RoutingTable.Supervisor,
+        node_id: node_id,
+        ip_tuple: ip_tuple,
+        node_id_enc: node_id_enc,
+        cluster: header,
+        cluster_secret: cluster_secret,
+        rt_name: rt_name
+      })
+
+    node_id |> get_rtable(header, rt_ident)
   end
 
   def handle_info(:cluster_secret, state) do
@@ -720,8 +724,8 @@ defmodule CrissCrossDHT.Server.Worker do
           |> :binary.list_to_bin()
           |> Utils.unwrap()
 
-        case state.cluster_config do
-          %{^cluster_header => %{cypher: cypher} = cluster_secret} ->
+        case state.cluster_mod.get_cluster(cluster_header) do
+          %{cypher: cypher} = cluster_secret ->
             decrypted = Utils.decrypt(body, cypher)
 
             case decrypted do
@@ -1120,7 +1124,8 @@ defmodule CrissCrossDHT.Server.Worker do
     valid_signature = Utils.verify_signature(cluster_secret, remote.value, remote.signature)
 
     hash_matches =
-      Utils.hash(Utils.hash(remote.key_string)) == remote.name and
+      byte_size(remote.value) < @max_stored_bytesize and
+        Utils.hash(Utils.hash(remote.key_string)) == remote.name and
         Utils.check_generation(
           state.storage_mod,
           state.storage_pid,
@@ -1212,9 +1217,10 @@ defmodule CrissCrossDHT.Server.Worker do
 
     valid_signature = Utils.verify_signature(cluster_secret, remote.value, remote.signature)
     hash_matches = Utils.hash(remote.value) == remote.key
+    size_ok = byte_size(remote.value) < @max_stored_bytesize
 
     payload =
-      if fits_in_ttl and hash_matches and valid_signature do
+      if fits_in_ttl and hash_matches and valid_signature and size_ok do
         Logger.info(
           "Putting #{Utils.encode_human(remote.value)} in queue for cluster #{Utils.encode_human(cluster_header)}"
         )
@@ -1452,7 +1458,8 @@ defmodule CrissCrossDHT.Server.Worker do
       Utils.verify_signature(cluster_secret, remote.value, remote.signature_cluster)
 
     valid_signature =
-      valid_cluster_signature and
+      byte_size(remote.value) < @max_stored_bytesize and
+        valid_cluster_signature and
         Utils.hash(Utils.hash(remote.key_string)) == remote.name and
         case Utils.load_public_key(remote.key_string) do
           {:ok, public_key} ->
@@ -1604,7 +1611,7 @@ defmodule CrissCrossDHT.Server.Worker do
       socket,
       state.node_id,
       state.ip_tuple,
-      state.cluster_config
+      state.cluster_mod.get_cluster(state.bootstrap_overlay)
     )
     |> Search.find_node(state.bootstrap_overlay, target: state.node_id, start_nodes: nodes)
   end

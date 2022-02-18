@@ -178,13 +178,16 @@ defmodule CrissCrossDHT.Search.Worker do
     old_nodes = update_responded_node(state.nodes, remote)
 
     new_nodes =
-      Enum.map(nodes, fn node ->
-        {id, ip, port} = node
+      Enum.map(nodes, fn
+        {id, ip, port} ->
+          unless Enum.find(state.nodes, fn x -> x.id == id end) != nil or
+                   {ip, port} == state.ip_tuple do
+            %Node{id: id, ip: ip, port: port}
+          end
 
-        unless Enum.find(state.nodes, fn x -> x.id == id end) != nil or
-                 {ip, port} == state.ip_tuple do
-          %Node{id: id, ip: ip, port: port}
-        end
+        other ->
+          Logger.warn("Remote node sent invalid node reply #{inspect(other)}")
+          nil
       end)
       |> Enum.filter(fn x -> x != nil end)
 
@@ -312,8 +315,8 @@ defmodule CrissCrossDHT.Search.Worker do
 
   defp get_cluster_info(cluster_header, %{cluster_config: cluster_config}) do
     case cluster_config do
-      %{^cluster_header => cluster_secret} -> {cluster_header, cluster_secret}
-      _ -> nil
+      nil -> nil
+      _ -> {cluster_header, cluster_config}
     end
   end
 end

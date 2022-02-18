@@ -110,10 +110,18 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
     Process.send_after(self(), :review, @review_time)
 
     ## Start timer for neighbourhood maintenance
-    Process.send_after(self(), :neighbourhood_maintenance, @neighbourhood_maintenance_time)
+    Process.send_after(
+      self(),
+      :neighbourhood_maintenance,
+      @neighbourhood_maintenance_time + :rand.uniform(@neighbourhood_maintenance_time)
+    )
 
     ## Start timer for bucket maintenance
-    Process.send_after(self(), :bucket_maintenance, @bucket_maintenance_time)
+    Process.send_after(
+      self(),
+      :bucket_maintenance,
+      @bucket_maintenance_time + :rand.uniform(@bucket_maintenance_time)
+    )
 
     ## Generate name of the ets cache table from the node_id as an atom
     ets_name = node_id |> Utils.encode_human() |> String.to_atom()
@@ -159,11 +167,15 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   neighbourhood.
   """
   def handle_info(:neighbourhood_maintenance, state) do
-    Distance.gen_node_id(248, state.node_id)
+    Distance.gen_node_id(256, state.node_id)
     |> find_node_on_random_node(state)
 
     ## Restart the Timer
-    Process.send_after(self(), :neighbourhood_maintenance, @neighbourhood_maintenance_time)
+    Process.send_after(
+      self(),
+      :neighbourhood_maintenance,
+      @neighbourhood_maintenance_time + :rand.uniform(@neighbourhood_maintenance_time)
+    )
 
     {:noreply, state}
   end
@@ -183,14 +195,20 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
     |> Stream.with_index()
     |> Enum.each(fn {bucket, index} ->
       if Bucket.age(bucket) >= @bucket_max_idle_time or Bucket.size(bucket) < 6 do
-        Logger.info("Staring find_node search on bucket #{index}")
+        Logger.info(
+          "Staring find_node search on bucket #{index} for cluster #{Utils.encode_human(state.cluster)}"
+        )
 
         Distance.gen_node_id(index, state.node_id)
         |> find_node_on_random_node(state)
       end
     end)
 
-    Process.send_after(self(), :bucket_maintenance, @bucket_maintenance_time)
+    Process.send_after(
+      self(),
+      :bucket_maintenance,
+      @bucket_maintenance_time + :rand.uniform(@bucket_maintenance_time)
+    )
 
     {:noreply, state}
   end
@@ -366,7 +384,9 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
         |> Search.find_node(state.cluster, target: target, start_nodes: [node])
 
       nil ->
-        Logger.warn("No nodes in our routing table.")
+        Logger.warn(
+          "No nodes in our routing table for cluster #{Utils.encode_human(state.cluster)}."
+        )
     end
   end
 

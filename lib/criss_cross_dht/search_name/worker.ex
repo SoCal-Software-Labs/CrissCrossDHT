@@ -32,7 +32,7 @@ defmodule CrissCrossDHT.SearchName.Worker do
       opts[:type],
       opts[:tid],
       opts[:name],
-      opts[:clusters]
+      opts[:cluster]
     ]
 
     GenServer.start_link(__MODULE__, args, name: opts[:name])
@@ -292,8 +292,8 @@ defmodule CrissCrossDHT.SearchName.Worker do
 
   defp get_cluster_info(cluster_header, %{cluster_config: cluster_config}) do
     case cluster_config do
-      %{^cluster_header => cluster_secret} -> {cluster_header, cluster_secret}
-      _ -> nil
+      nil -> nil
+      _ -> {cluster_header, cluster_config}
     end
   end
 end

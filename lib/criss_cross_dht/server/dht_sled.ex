@@ -25,6 +25,7 @@ defmodule CrissCrossDHT.Server.DHTSled do
       :ok = scan(conn, "names")
       :ok = scan(conn, "members")
       :ok = scan(conn, "announced")
+      :ok = scan(conn, "nodes")
       Process.send_after(self(), :review_storage, @review_time)
 
       {:noreply, conn}

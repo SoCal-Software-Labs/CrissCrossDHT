@@ -14,10 +14,12 @@ defmodule CrissCrossDHT.Supervisor do
     Logger.info("Node-ID: #{node_id_enc}")
 
     {storage_mod, storage_opts} = Map.get(config, :storage)
+    cluster_dir = Map.get(config, :cluster_dir)
 
     config = Map.put(config, :storage, {storage_mod, storage_opts})
 
     [
+      {CrissCrossDHT.ClusterWatcher, cluster_dir},
       {storage_mod,
        storage_opts ++
          [name: CrissCrossDHT.Registry.via(node_id_enc, CrissCrossDHT.Server.Storage)]},

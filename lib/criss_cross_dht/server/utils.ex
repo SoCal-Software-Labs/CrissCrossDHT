@@ -51,7 +51,7 @@ defmodule CrissCrossDHT.Server.Utils do
 
     s =
       Stream.repeatedly(fn -> :rand.uniform(255) end)
-      |> Enum.take(40)
+      |> Enum.take(500)
       |> :binary.list_to_bin()
 
     # hash(s)
@@ -109,54 +109,69 @@ defmodule CrissCrossDHT.Server.Utils do
     end)
   end
 
-  def config(config, :clusters) do
-    Map.get(config, :clusters, %{})
-    |> Enum.map(fn {k, config} ->
-      pub_key =
-        case config do
-          %{public_key: pub} when not is_nil(pub) ->
-            {:ok, pub_key} = load_public_key(decode_human!(pub))
-            pub_key
-
-          _ ->
-            raise "Cluster #{k} configured without public key"
-        end
-
-      priv_key =
-        case config do
-          %{private_key: priv} when not is_nil(priv) ->
-            {:ok, priv_key} = load_private_key(decode_human!(priv))
-            priv_key
-
-          _ ->
-            nil
-        end
-
-      cypher =
-        case config do
-          %{secret: secret} when not is_nil(secret) ->
-            decode_human!(secret)
-
-          _ ->
-            raise "Cluster #{k} configured without secret"
-        end
-
-      max_ttl =
-        case config do
-          %{max_ttl: max_ttl} when is_number(max_ttl) and max_ttl >= -1 ->
-            max_ttl
-
-          _ ->
-            raise "Cluster #{k} configured without max_ttl"
-        end
-
-      {decode_human!(k),
-       %{max_ttl: max_ttl, cypher: cypher, public_key: pub_key, private_key: priv_key}}
-    end)
-    |> Enum.into(%{})
-  end
-
   def config(config, value, ret \\ nil), do: Map.get(config, value, ret)
+
+  def load_cluster({k, config}) do
+    pub_key =
+      case config do
+        %{public_key: pub} when not is_nil(pub) ->
+          {:ok, pub_key} = load_public_key(decode_human!(pub))
+          pub_key
+
+        _ ->
+          raise "Cluster #{k} configured without public key"
+      end
+
+    priv_key =
+      case config do
+        %{private_key: priv} when not is_nil(priv) ->
+          {:ok, priv_key} = load_private_key(decode_human!(priv))
+          priv_key
+
+        _ ->
+          nil
+      end
+
+    cypher =
+      case config do
+        %{secret: secret} when not is_nil(secret) ->
+          decode_human!(secret)
+
+        _ ->
+          raise "Cluster #{k} configured without secret"
+      end
+
+    max_ttl =
+      case config do
+        %{max_ttl: max_ttl} when is_number(max_ttl) and max_ttl >= -1 ->
+          max_ttl
+
+        _ ->
+          raise "Cluster #{k} configured without max_ttl"
+      end
+
+    max_transfer =
+      case config do
+        %{max_transfer: max_transfer} when is_number(max_transfer) and max_transfer >= -1 ->
+          if max_transfer == -1 do
+            4_294_967_295
+          else
+            max_transfer
+          end
+
+        _ ->
+          raise "Cluster #{k} configured without max_transfer"
+      end
+
+    {decode_human!(k),
+     %{
+       max_ttl: max_ttl,
+       max_transfer: max_transfer,
+       cypher: cypher,
+       public_key: pub_key,
+       private_key: priv_key
+     }}
+  end
 
   def encrypt(secret, payload) do
     do_encrypt(payload, secret)
@@ -209,7 +224,7 @@ defmodule CrissCrossDHT.Server.Utils do
   end
 
   def decode_human!(bin) do
-    Base58.decode(bin)
+    Base58.decode(dbin)
   end
 
   def combine_to_sign(list) do
