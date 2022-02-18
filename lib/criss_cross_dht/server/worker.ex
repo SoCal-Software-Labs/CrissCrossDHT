@@ -23,7 +23,7 @@ defmodule CrissCrossDHT.Server.Worker do
 
   @process_values_interval 10 * 1000
 
-  @bootstrap_cluster_interval 15 * 1000
+  @bootstrap_cluster_interval 60 * 1000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, [node_id: opts[:node_id], config: opts[:config]],
@@ -587,7 +587,7 @@ defmodule CrissCrossDHT.Server.Worker do
   end
 
   def handle_info(:reannounce, state) do
-    Logger.info("Reannouncing trees to peers")
+    Logger.debug("Reannouncing trees to peers")
 
     pid = self()
 
@@ -600,7 +600,7 @@ defmodule CrissCrossDHT.Server.Worker do
   end
 
   def handle_info(:process_values, state) do
-    Logger.info("Checking for queued trees to clone")
+    Logger.debug("Checking for queued trees to clone")
 
     pid = self()
 
@@ -613,7 +613,7 @@ defmodule CrissCrossDHT.Server.Worker do
   end
 
   def handle_info(:bootstrap_clusters, state) do
-    Logger.info("Searching for new nodes for clusters")
+    Logger.debug("Searching for new nodes for clusters")
     worker_pid = self()
 
     Task.start(fn ->
