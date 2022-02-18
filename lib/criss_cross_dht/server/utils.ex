@@ -224,7 +224,7 @@ defmodule CrissCrossDHT.Server.Utils do
   end
 
   def decode_human!(bin) do
-    Base58.decode(dbin)
+    Base58.decode(bin)
   end
 
   def combine_to_sign(list) do
