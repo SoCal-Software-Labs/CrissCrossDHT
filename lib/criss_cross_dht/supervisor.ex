@@ -15,11 +15,17 @@ defmodule CrissCrossDHT.Supervisor do
 
     {storage_mod, storage_opts} = Map.get(config, :storage)
     cluster_dir = Map.get(config, :cluster_dir)
+    name_dir = Map.get(config, :name_dir)
 
     config = Map.put(config, :storage, {storage_mod, storage_opts})
 
     [
       {CrissCrossDHT.ClusterWatcher, cluster_dir},
+      {CrissCrossDHT.NameWatcher, name_dir},
+      Supervisor.child_spec(
+        {Cachex, name: :search_limit},
+        id: :search_limit
+      ),
       {storage_mod,
        storage_opts ++
          [name: CrissCrossDHT.Registry.via(node_id_enc, CrissCrossDHT.Server.Storage)]},

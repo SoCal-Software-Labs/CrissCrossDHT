@@ -37,6 +37,10 @@ defmodule CrissCrossDHT.Server.DHTRedis do
     {:ok, %{conn: conn}}
   end
 
+  def queue_announce(_conn, _cluster, _infohash, _ip, _port, _ttl) do
+    :ok
+  end
+
   def cluster_announce(pid, cluster, infohash, ttl) do
     ttl =
       if ttl == -1 do
@@ -276,6 +280,10 @@ defmodule CrissCrossDHT.Server.DHTRedis do
       nil ->
         :ok
     end
+  end
+
+  def reannounce_trees(_conn, _worker_pid) do
+    :ok
   end
 
   def reannounce_names(conn, worker_pid) do

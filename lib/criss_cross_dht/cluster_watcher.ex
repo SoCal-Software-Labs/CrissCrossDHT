@@ -75,7 +75,15 @@ defmodule CrissCrossDHT.ClusterWatcher do
         max_transfer: 0
       }
     })
-    |> Enum.map(&Utils.load_cluster/1)
+    |> Enum.flat_map(fn c ->
+      try do
+        [Utils.load_cluster(c)]
+      rescue
+        e ->
+          Logger.error("Error loading cluster #{inspect(e)}")
+          []
+      end
+    end)
     |> Enum.into(%{})
   end
 

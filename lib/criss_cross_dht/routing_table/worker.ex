@@ -377,9 +377,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
           socket,
           state.node_id,
           state.ip_tuple,
-          %{
-            state.cluster => state.cluster_secret
-          }
+          state.cluster_secret
         )
         |> Search.find_node(state.cluster, target: target, start_nodes: [node])
 

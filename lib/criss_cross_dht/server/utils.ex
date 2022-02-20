@@ -181,9 +181,9 @@ defmodule CrissCrossDHT.Server.Utils do
     do_decrypt(payload, secret)
   end
 
-  def verify_signature(%{public_key: nil}, value, signature), do: false
+  def verify_signature(nil, value, signature), do: false
 
-  def verify_signature(%{public_key: pub_key}, msg, signature) do
+  def verify_signature(pub_key, msg, signature) do
     case ExSchnorr.verify(pub_key, msg, signature, @schnorr_context) do
       {:ok, true} ->
         true
@@ -247,11 +247,29 @@ defmodule CrissCrossDHT.Server.Utils do
   end
 
   def load_public_key(s) do
-    ExSchnorr.public_from_bytes(s)
+    case ExSchnorr.public_from_bytes(s) do
+      {:ok, c} ->
+        {:ok, c}
+
+      e ->
+        case CrissCrossDHT.NameWatcher.get_name(s) do
+          %{public_key: k} -> {:ok, k}
+          _ -> e
+        end
+    end
   end
 
   def load_private_key(s) do
-    ExSchnorr.private_from_bytes(s)
+    case ExSchnorr.private_from_bytes(s) do
+      {:ok, c} ->
+        {:ok, c}
+
+      e ->
+        case CrissCrossDHT.NameWatcher.get_name(s) do
+          %{private_key: k} -> {:ok, k}
+          _ -> e
+        end
+    end
   end
 
   def check_ttl(%{max_ttl: -1}, _), do: true
