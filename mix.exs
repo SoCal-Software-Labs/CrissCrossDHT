@@ -29,7 +29,8 @@ defmodule CrissCrossDHT.Mixfile do
       {:dialyxir, "~> 0.5.1", only: [:dev, :test]},
       {:ex_multihash, "~> 2.0"},
       {:sorted_set_kv, "~> 0.1.2"},
-      {:redix, github: "SoCal-Software-Labs/safe-redix"}
+      {:redix, github: "SoCal-Software-Labs/safe-redix"},
+      {:cachex, "~> 3.4.0"}
     ]
   end
 
