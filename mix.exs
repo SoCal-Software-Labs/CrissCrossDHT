@@ -30,7 +30,8 @@ defmodule CrissCrossDHT.Mixfile do
       {:ex_multihash, "~> 2.0"},
       {:sorted_set_kv, "~> 0.1.2"},
       {:redix, github: "SoCal-Software-Labs/safe-redix"},
-      {:cachex, "~> 3.4.0"}
+      {:cachex, "~> 3.4.0"},
+      {:ex_p2p, path: "../ex_p2p"}
     ]
   end
 

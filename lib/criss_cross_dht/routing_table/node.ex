@@ -181,7 +181,7 @@ defmodule CrissCrossDHT.RoutingTable.Node do
 
     payload = KRPCProtocol.encode(:ping, node_id: state.own_node_id)
     payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
-    :gen_udp.send(state.socket, state.ip, state.port, payload)
+    CrissCrossDHT.UDPQuic.send(state.socket, state.ip, state.port, payload)
 
     {:noreply, %{state | :last_query_snd => :os.system_time(:millisecond)}}
   end

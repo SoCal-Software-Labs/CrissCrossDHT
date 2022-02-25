@@ -13,6 +13,7 @@ defmodule CrissCrossDHT.Server.Worker do
   alias CrissCrossDHT.Search.Worker, as: Search
   alias CrissCrossDHT.SearchValue.Worker, as: SearchValue
   alias CrissCrossDHT.SearchName.Worker, as: SearchName
+  alias CrissCrossDHT.UDPQuic
 
   @type ip_vers :: :ipv4 | :ipv6
 
@@ -29,7 +30,7 @@ defmodule CrissCrossDHT.Server.Worker do
 
   @max_announce_broadcast_ttl 2 * 60 * 60 * 60 * 1000
 
-  @search_limit_ttl 60 * 1000 * 5
+  @search_limit_ttl 1000 * 5
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, [node_id: opts[:node_id], config: opts[:config]],
@@ -168,16 +169,13 @@ defmodule CrissCrossDHT.Server.Worker do
     {name, tid}
   end
 
-  def create_udp_socket(config, port, ip_vers) do
-    ip_addr = ip_vers |> to_string() |> Kernel.<>("_bind_addr") |> String.to_atom()
-    bind_ip = Utils.config(config, ip_addr, {127, 0, 0, 1})
-    options = ip_vers |> inet_option() |> maybe_put(:ip, bind_ip)
+  def create_udp_socket(ip_addr, port, dispatcher) do
+    case UDPQuic.open(ip_addr, port, dispatcher) do
+      {:ok, socket, bind_addr} ->
+        [l, r] = String.split(bind_addr, ":")
+        {:ok, addr} = :inet.parse_address(String.to_charlist(l))
 
-    case :gen_udp.open(port, options ++ [{:active, true}]) do
-      {:ok, socket} ->
-        Logger.debug("Init DHT Node (#{ip_vers})")
-
-        {socket, bind_ip}
+        {socket, addr, String.to_integer(r)}
 
       {:error, reason} ->
         {:stop, reason}
@@ -185,25 +183,13 @@ defmodule CrissCrossDHT.Server.Worker do
   end
 
   def init(node_id: node_id, config: config) do
-    ## Returns false in case the option is not set in the environment (setting
-    ## the option to false or not setting the option at all has the same effect
-    ## in this case)
-    cfg_ipv6_is_enabled? = Utils.config(config, :ipv6, false)
-    cfg_ipv4_is_enabled? = Utils.config(config, :ipv4, true)
-
-    unless cfg_ipv4_is_enabled? or cfg_ipv6_is_enabled? do
-      raise "Configuration failure: Either ipv4 or ipv6 has to be set to true."
-    end
-
+    cfg_ip = Utils.config(config, :bind_ip, {127, 0, 0, 1})
     cfg_port = Utils.config(config, :port)
+    dispatcher = Utils.config(config, :dispatcher)
     {storage_mod, _} = Utils.config(config, :storage)
     process_values_callback = Utils.config(config, :process_values_callback)
 
-    {socket, socket_ip} =
-      if cfg_ipv4_is_enabled?, do: create_udp_socket(config, cfg_port, :ipv4), else: {nil, nil}
-
-    {socket6, socket6_ip} =
-      if cfg_ipv6_is_enabled?, do: create_udp_socket(config, cfg_port, :ipv6), else: {nil, nil}
+    {socket, socket_ip, socket_port} = create_udp_socket(cfg_ip, cfg_port, dispatcher)
 
     Process.send_after(self(), :cluster_secret, @time_cluster_secret)
     Process.send_after(self(), :reannounce, @reannounce_interval)
@@ -219,14 +205,13 @@ defmodule CrissCrossDHT.Server.Worker do
       node_id: node_id,
       node_id_enc: Utils.encode_human(node_id),
       socket: socket,
-      socket6: socket6,
       old_secret: nil,
       secret: Utils.gen_secret(),
       cluster_mod: CrissCrossDHT.ClusterWatcher,
       config: config,
       self_pid: self(),
       cache: cache,
-      ip_tuple: {socket_ip, cfg_port},
+      ip_tuple: {socket_ip, socket_port},
       storage_mod: storage_mod,
       storage_pid: storage_pid,
       process_values_callback: process_values_callback,
@@ -252,6 +237,7 @@ defmodule CrissCrossDHT.Server.Worker do
          infohash
        ) do
       values = state.storage_mod.get_nodes(state.storage_pid, cluster_header, infohash)
+      IO.inspect({:local, values})
       Enum.map(values, callback)
     end
   end
@@ -294,7 +280,7 @@ defmodule CrissCrossDHT.Server.Worker do
         payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
 
         for node <- CrissCrossDHT.Search.Worker.nodes_to_search_nodes(nodes) do
-          :gen_udp.send(state.socket, node.ip, node.port, payload)
+          UDPQuic.send(state.socket, node.ip, node.port, payload)
         end
 
       _ ->
@@ -333,7 +319,7 @@ defmodule CrissCrossDHT.Server.Worker do
           |> CrissCrossDHT.RoutingTable.Worker.closest_nodes(name)
 
         for node <- CrissCrossDHT.Search.Worker.nodes_to_search_nodes(nodes) do
-          :gen_udp.send(state.socket, node.ip, node.port, payload)
+          UDPQuic.send(state.socket, node.ip, node.port, payload)
         end
 
       _ ->
@@ -774,7 +760,6 @@ defmodule CrissCrossDHT.Server.Worker do
       Task.start(fn ->
         {cluster_header, body} =
           raw_data
-          |> :binary.list_to_bin()
           |> Utils.unwrap()
 
         case state.cluster_mod.get_cluster(cluster_header) do
@@ -787,7 +772,7 @@ defmodule CrissCrossDHT.Server.Worker do
                 |> String.trim_trailing("\n")
                 |> KRPCProtocol.decode()
                 |> handle_message(
-                  {socket, get_ip_vers(socket)},
+                  {socket, :ipv4},
                   {cluster_header, cluster_secret},
                   ip,
                   port,
@@ -827,7 +812,7 @@ defmodule CrissCrossDHT.Server.Worker do
     args = [code: error.code, msg: error.msg, tid: error.tid]
     payload = KRPCProtocol.encode(:error, args)
 
-    :gen_udp.send(
+    UDPQuic.send(
       state.socket,
       ip,
       port,
@@ -903,7 +888,7 @@ defmodule CrissCrossDHT.Server.Worker do
 
     # Logger.debug(PrettyHex.pretty_hex(to_string(payload)))
 
-    :gen_udp.send(
+    UDPQuic.send(
       socket,
       ip,
       port,
@@ -958,7 +943,7 @@ defmodule CrissCrossDHT.Server.Worker do
     Logger.debug("PEERS ARGS: #{inspect(args)}")
     payload = KRPCProtocol.encode(:get_peers_reply, args)
 
-    :gen_udp.send(
+    UDPQuic.send(
       socket,
       ip,
       port,
@@ -1019,7 +1004,7 @@ defmodule CrissCrossDHT.Server.Worker do
       args = [code: 203, msg: "Announce_peer with wrong token", tid: remote.tid]
       payload = KRPCProtocol.encode(:error, args)
 
-      :gen_udp.send(
+      UDPQuic.send(
         socket,
         ip,
         port,
@@ -1084,7 +1069,7 @@ defmodule CrissCrossDHT.Server.Worker do
           KRPCProtocol.encode(:find_value_reply, args)
       end
 
-    :gen_udp.send(
+    UDPQuic.send(
       socket,
       ip,
       port,
@@ -1153,7 +1138,7 @@ defmodule CrissCrossDHT.Server.Worker do
           KRPCProtocol.encode(:find_name_nodes_reply, args)
       end
 
-    :gen_udp.send(
+    UDPQuic.send(
       socket,
       ip,
       port,
@@ -1248,7 +1233,7 @@ defmodule CrissCrossDHT.Server.Worker do
         KRPCProtocol.encode(:store_name_reply, args)
       end
 
-    :gen_udp.send(
+    UDPQuic.send(
       socket,
       ip,
       port,
@@ -1299,7 +1284,7 @@ defmodule CrissCrossDHT.Server.Worker do
         KRPCProtocol.encode(:store_reply, args)
       end
 
-    :gen_udp.send(
+    UDPQuic.send(
       socket,
       ip,
       port,
@@ -1354,7 +1339,7 @@ defmodule CrissCrossDHT.Server.Worker do
 
     Enum.each(remote.nodes, fn node_tuple ->
       {_id, ip, port} = node_tuple
-      :gen_udp.send(socket, ip, port, payload)
+      UDPQuic.send(socket, ip, port, payload)
     end)
 
     {:noreply, state}
@@ -1645,9 +1630,6 @@ defmodule CrissCrossDHT.Server.Worker do
   # Private Functions #
   #####################
 
-  defp inet_option(:ipv4), do: [:inet]
-  defp inet_option(:ipv6), do: [:inet6, {:ipv6_v6only, true}]
-
   defp maybe_put(list, _name, nil), do: list
   defp maybe_put(list, name, value), do: list ++ [{name, value}]
 
@@ -1693,22 +1675,12 @@ defmodule CrissCrossDHT.Server.Worker do
     end
   end
 
-  ## Gets a socket as an argument and returns to which ip version (:ipv4 or
-  ## :ipv6) the socket belongs.
-  @spec get_ip_vers(port) :: ip_vers
-  defp get_ip_vers(socket) when is_port(socket) do
-    case :inet.getopts(socket, [:ipv6_v6only]) do
-      {:ok, [ipv6_v6only: true]} -> :ipv6
-      {:ok, []} -> :ipv4
-    end
-  end
-
   defp send_ping_reply(node_id, tid, {cluster_header, %{cypher: cypher}}, ip, port, socket) do
     Logger.debug("[#{Utils.encode_human(node_id)}] << ping_reply")
 
     payload = KRPCProtocol.encode(:ping_reply, tid: tid, node_id: node_id)
 
-    :gen_udp.send(
+    UDPQuic.send(
       socket,
       ip,
       port,

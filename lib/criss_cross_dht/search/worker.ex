@@ -217,7 +217,7 @@ defmodule CrissCrossDHT.Search.Worker do
 
       payload = KRPCProtocol.encode(:announce_peer, args)
       payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
-      :gen_udp.send(state.socket, node.ip, node.port, payload)
+      CrissCrossDHT.UDPQuic.send(state.socket, node.ip, node.port, payload)
     end)
   end
 
@@ -242,7 +242,7 @@ defmodule CrissCrossDHT.Search.Worker do
 
     payload = gen_request_msg(state.type, state)
     payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
-    :gen_udp.send(state.socket, node.ip, node.port, payload)
+    CrissCrossDHT.UDPQuic.send(state.socket, node.ip, node.port, payload)
 
     new_nodes =
       state.nodes
