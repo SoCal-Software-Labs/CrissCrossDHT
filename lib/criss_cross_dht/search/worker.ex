@@ -210,10 +210,9 @@ defmodule CrissCrossDHT.Search.Worker do
         info_hash: state.target,
         token: node.token,
         port: state.port,
+        meta: state.meta,
         ttl: state.ttl
       ]
-
-      args = if state.port == 0, do: args ++ [implied_port: true], else: args
 
       payload = KRPCProtocol.encode(:announce_peer, args)
       payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))

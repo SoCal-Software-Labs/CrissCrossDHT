@@ -139,25 +139,6 @@ defmodule CrissCrossDHT do
   end
 
   @doc ~S"""
-  This function needs an infohash as binary and callback function as
-  parameter. This function does the same thing as the search/2 function, except
-  it sends an announce message to the found peers. This function does not need a
-  TCP port which means the announce message sets `:implied_port` to true.
-
-  ## Example
-      iex> "3F19B149F53A50E14FC0B79926A391896EABAB6F"
-           |> Base.decode16!
-           |> CrissCrossDHT.search_announce(fn(node) ->
-             {ip, port} = node
-             IO.puts "ip: #{inspect ip} port: #{port}"
-           end)
-  """
-  @spec search_announce(cluster, infohash, ttl, fun) :: atom
-  def search_announce(cluster, infohash, ttl, callback) do
-    CrissCrossDHT.Server.Worker.search_announce(@process_name, cluster, infohash, ttl, callback)
-  end
-
-  @doc ~S"""
   This function needs an infohash as binary, a callback function as parameter,
   and a TCP port as integer. This function does the same thing as the search/2
   function, except it sends an announce message to the found peers.
@@ -170,13 +151,14 @@ defmodule CrissCrossDHT do
              IO.puts "ip: #{inspect ip} port: #{port}"
            end, 6881)
   """
-  @spec search_announce(cluster, infohash, fun, ttl, tcp_port) :: atom
-  def search_announce(cluster, infohash, callback, ttl, port) do
+  @spec search_announce(cluster, infohash, fun, ttl, tcp_port, any) :: atom
+  def search_announce(cluster, infohash, callback, ttl, port, meta \\ nil) do
     CrissCrossDHT.Server.Worker.search_announce(
       @process_name,
       cluster,
       infohash,
       port,
+      meta,
       ttl,
       callback
     )

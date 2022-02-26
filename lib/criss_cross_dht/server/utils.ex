@@ -235,6 +235,10 @@ defmodule CrissCrossDHT.Server.Utils do
 
   def name_from_private_rsa_key(priv_key) do
     {:ok, pub_key} = ExSchnorr.public_from_private(priv_key)
+    name_from_public_key(pub_key)
+  end
+
+  def name_from_public_key(pub_key) do
     {:ok, encoded} = ExSchnorr.public_to_bytes(pub_key)
     hash(hash(encoded))
   end

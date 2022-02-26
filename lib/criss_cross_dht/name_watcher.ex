@@ -45,7 +45,7 @@ defmodule CrissCrossDHT.NameWatcher do
       ) do
     if String.ends_with?(path, "yaml") and :modified in events do
       Logger.info("Name config change detected: #{path} #{inspect(events)}")
-      new_names = read_name(path) |> Enum.map(&Utils.load_name/1) |> Enum.into(names)
+      new_names = read_name(path) |> Enum.into(names)
       {:noreply, %{state | names: new_names}}
     else
       {:noreply, state}

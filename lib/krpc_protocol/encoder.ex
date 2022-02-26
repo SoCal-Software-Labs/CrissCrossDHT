@@ -218,8 +218,8 @@ defmodule KRPCProtocol.Encoder do
     options =
       args[:node_id]
       |> query_dict(args[:info_hash])
-      |> add_option_if_defined(:implied_port, args[:implied_port])
       |> add_option_if_defined(:port, args[:port])
+      |> add_option_if_defined(:meta, args[:meta])
       |> add_option_if_defined(:token, args[:token])
       |> add_option_if_defined(:ttl, args[:ttl])
 
@@ -304,23 +304,37 @@ defmodule KRPCProtocol.Encoder do
     gen_dht_response(%{:id => id, :nodes6 => nodes}, tid)
   end
 
-  def encode(:get_peers_reply, node_id: id, nodes: nodes, tid: tid, token: token) do
+  def encode(:get_peers_reply,
+        node_id: id,
+        info_hash: info_hash,
+        nodes: nodes,
+        tid: tid,
+        token: token
+      ) do
     gen_dht_response(
       %{
         :id => id,
         :token => token,
-        :nodes => nodes
+        :nodes => nodes,
+        :info_hash => info_hash
       },
       tid
     )
   end
 
-  def encode(:get_peers_reply, node_id: id, values: values, tid: tid, token: token) do
+  def encode(:get_peers_reply,
+        node_id: id,
+        info_hash: info_hash,
+        values: values,
+        tid: tid,
+        token: token
+      ) do
     gen_dht_response(
       %{
         :id => id,
         :token => token,
-        :values => values
+        :values => values,
+        :info_hash => info_hash
       },
       tid
     )

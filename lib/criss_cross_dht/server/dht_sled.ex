@@ -119,7 +119,7 @@ defmodule CrissCrossDHT.Server.DHTSled do
     end
   end
 
-  def put(conn, cluster, infohash, ip, port, ttl) do
+  def put(conn, cluster, infohash, ip, port, meta, ttl) do
     bin = :erlang.term_to_binary({ip, port})
 
     :ok =
@@ -127,7 +127,7 @@ defmodule CrissCrossDHT.Server.DHTSled do
         Agent.get(conn, fn list -> list end),
         "members",
         Enum.join([cluster, infohash, bin], "-"),
-        nil,
+        :erlang.term_to_binary(meta),
         ttl,
         true
       )
@@ -216,25 +216,6 @@ defmodule CrissCrossDHT.Server.DHTSled do
     :ok
   end
 
-  {:put,
-   <<65, 32, 73, 159, 199, 231, 221, 211, 99, 91, 135, 146, 31, 215, 223, 168, 245, 87, 193, 1,
-     186, 90, 81, 250, 203, 170, 64, 21, 203, 246, 210, 144, 157, 227, 45, 65, 32, 49, 135, 50,
-     248, 34, 117, 206, 53, 87, 189, 226, 87, 155, 11, 233, 179, 78, 177, 107, 34, 187, 188, 117,
-     193, 222, 100, 254, 229, 161, 13, 218, 176>>}
-
-  {:put,
-   <<65, 32, 73, 159, 199, 231, 221, 211, 99, 91, 135, 146, 31, 215, 223, 168, 245, 87, 193, 1,
-     186, 90, 81, 250, 203, 170, 64, 21, 203, 246, 210, 144, 157, 227, 45, 65, 32, 49, 135, 50,
-     248, 34, 117, 206, 53, 87, 189, 226, 87, 155, 11, 233, 179, 78, 177, 107, 34, 187, 188, 117,
-     193, 222, 100, 254, 229, 161, 13, 218, 176, 45, 131, 104, 2, 104, 4, 97, 127, 97, 0, 97, 0,
-     97, 1, 98, 0, 0, 11, 187>>}
-
-  {:get,
-   <<65, 32, 73, 159, 199, 231, 221, 211, 99, 91, 135, 146, 31, 215, 223, 168, 245, 87, 193, 1,
-     186, 90, 81, 250, 203, 170, 64, 21, 203, 246, 210, 144, 157, 227, 45, 65, 32, 49, 135, 50,
-     248, 34, 117, 206, 53, 87, 189, 226, 87, 155, 11, 233, 179, 78, 177, 107, 34, 187, 188, 117,
-     193, 222, 100, 254, 229, 161, 13, 218, 176>>}
-
   def refresh_name(conn, bin) do
     conn = Agent.get(conn, fn c -> c end)
     now = :os.system_time(:millisecond)
@@ -277,8 +258,17 @@ defmodule CrissCrossDHT.Server.DHTSled do
     |> Enum.flat_map(fn v ->
       case v do
         <<_::binary-size(size), right::binary>> ->
+          {meta_str, ttl} = SortedSetKV.zgetbykey(conn, "members", v, 0)
+
+          meta =
+            case meta_str do
+              nil -> nil
+              b -> :erlang.binary_to_term(b)
+            end
+
           try do
-            [:erlang.binary_to_term(right, [:safe])]
+            {ip, port} = :erlang.binary_to_term(right, [:safe])
+            [{ip, port, meta, ttl}]
           rescue
             ArgumentError ->
               Logger.error("Could not decode member from db")

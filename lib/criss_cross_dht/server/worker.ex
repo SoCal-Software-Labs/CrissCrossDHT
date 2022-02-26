@@ -66,14 +66,9 @@ defmodule CrissCrossDHT.Server.Worker do
     GenServer.cast(pid, {:search, cluster, infohash, callback})
   end
 
-  def search_announce(pid, cluster, infohash, ttl, callback) do
+  def search_announce(pid, cluster, infohash, port, meta, ttl, callback) do
     ttl = Utils.adjust_ttl(ttl)
-    GenServer.cast(pid, {:search_announce, cluster, infohash, callback, ttl})
-  end
-
-  def search_announce(pid, cluster, infohash, port, ttl, callback) do
-    ttl = Utils.adjust_ttl(ttl)
-    GenServer.cast(pid, {:search_announce, cluster, infohash, callback, ttl, port})
+    GenServer.cast(pid, {:search_announce, cluster, infohash, callback, ttl, port, meta})
   end
 
   def cluster_announce(pid, cluster, infohash, ttl) do
@@ -237,7 +232,6 @@ defmodule CrissCrossDHT.Server.Worker do
          infohash
        ) do
       values = state.storage_mod.get_nodes(state.storage_pid, cluster_header, infohash)
-      IO.inspect({:local, values})
       Enum.map(values, callback)
     end
   end
@@ -447,65 +441,7 @@ defmodule CrissCrossDHT.Server.Worker do
     {:noreply, state}
   end
 
-  def handle_cast({:search_announce, cluster, infohash, callback, ttl}, state) do
-    # TODO What about ipv6?
-
-    if Cachex.get!(:search_limit, {cluster, infohash}) == nil do
-      Cachex.put!(:search_limit, {cluster, infohash}, true, ttl: @search_limit_ttl)
-
-      nodes =
-        state.node_id
-        |> get_rtable(cluster, :ipv4)
-        |> CrissCrossDHT.RoutingTable.Worker.closest_nodes(infohash)
-
-      state.node_id_enc
-      |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.Search.Supervisor)
-      |> CrissCrossDHT.Search.Supervisor.start_child(
-        :get_peers,
-        state.socket,
-        state.node_id,
-        state.ip_tuple,
-        state.cluster_mod.get_cluster(cluster)
-      )
-      |> Search.get_peers(
-        cluster,
-        target: infohash,
-        start_nodes: nodes,
-        callback: callback,
-        port: 0,
-        announce: true,
-        ttl: min(@max_announce_broadcast_ttl, ttl)
-      )
-    end
-
-    {ip, port} = state.ip_tuple
-
-    state.storage_mod.put(
-      state.storage_pid,
-      cluster,
-      infohash,
-      ip,
-      port,
-      ttl
-    )
-
-    state.storage_mod.queue_announce(
-      state.storage_pid,
-      cluster,
-      infohash,
-      ip,
-      port,
-      ttl
-    )
-
-    get_local_nodes(state, cluster, infohash, callback)
-
-    :ok = state.storage_mod.cluster_announce(state.storage_pid, cluster, infohash, ttl)
-
-    {:noreply, state}
-  end
-
-  def handle_cast({:search_announce, cluster, infohash, callback, ttl, port}, state) do
+  def handle_cast({:search_announce, cluster, infohash, callback, ttl, port, meta}, state) do
     if Cachex.get!(:search_limit, {cluster, infohash}) == nil do
       Cachex.put!(:search_limit, {cluster, infohash}, true, ttl: @search_limit_ttl)
 
@@ -529,6 +465,7 @@ defmodule CrissCrossDHT.Server.Worker do
         start_nodes: nodes,
         callback: callback,
         port: port,
+        meta: meta,
         announce: true,
         ttl: min(@max_announce_broadcast_ttl, ttl)
       )
@@ -542,6 +479,7 @@ defmodule CrissCrossDHT.Server.Worker do
       infohash,
       ip,
       port,
+      meta,
       ttl
     )
 
@@ -584,6 +522,7 @@ defmodule CrissCrossDHT.Server.Worker do
         target: infohash,
         start_nodes: nodes,
         port: 0,
+        meta: nil,
         callback: callback,
         announce: false
       )
@@ -664,6 +603,7 @@ defmodule CrissCrossDHT.Server.Worker do
               start_nodes: nodes,
               callback: callback,
               port: 0,
+              meta: nil,
               announce: true,
               ttl: ttl
             )
@@ -676,6 +616,7 @@ defmodule CrissCrossDHT.Server.Worker do
               cluster_header,
               ip,
               port,
+              nil,
               ttl
             )
 
@@ -923,7 +864,14 @@ defmodule CrissCrossDHT.Server.Worker do
            remote.info_hash
          ) do
         values = state.storage_mod.get_nodes(state.storage_pid, cluster_header, remote.info_hash)
-        [node_id: state.node_id, values: values, tid: remote.tid, token: token]
+
+        [
+          node_id: state.node_id,
+          info_hash: remote.info_hash,
+          values: values,
+          tid: remote.tid,
+          token: token
+        ]
       else
         ## Get the closest nodes for the requested info_hash
         rtable = state.node_id |> get_rtable(cluster_header, ip_vers)
@@ -937,7 +885,14 @@ defmodule CrissCrossDHT.Server.Worker do
           )
 
         Logger.debug("[#{Utils.encode_human(remote.node_id)}] << get_peers_reply (nodes)")
-        [node_id: state.node_id, nodes: nodes, tid: remote.tid, token: token]
+
+        [
+          node_id: state.node_id,
+          info_hash: remote.info_hash,
+          nodes: nodes,
+          tid: remote.tid,
+          token: token
+        ]
       end
 
     Logger.debug("PEERS ARGS: #{inspect(args)}")
@@ -971,12 +926,7 @@ defmodule CrissCrossDHT.Server.Worker do
       Logger.debug("Valid Token")
       Logger.debug("#{inspect(remote)}")
 
-      port =
-        if Map.has_key?(remote, :implied_port) do
-          port
-        else
-          remote.port
-        end
+      port = remote.port
 
       state.storage_mod.put(
         state.storage_pid,
@@ -984,6 +934,7 @@ defmodule CrissCrossDHT.Server.Worker do
         remote.info_hash,
         ip,
         port,
+        remote.meta,
         min(remote.ttl, @max_announce_broadcast_ttl)
       )
 
@@ -1323,6 +1274,24 @@ defmodule CrissCrossDHT.Server.Worker do
       {socket, ip_vers}
     )
 
+    remote =
+      if remote.values do
+        new_vals =
+          Enum.filter(remote.values, fn
+            {_ip, port, meta, ttl}
+            when is_number(ttl) and is_number(port) and (is_binary(meta) or is_nil(meta)) ->
+              true
+
+            e ->
+              Logger.warning("Received find_node_reply with invalid node #{inspect(e)}")
+              false
+          end)
+
+        Map.put(remote, :values, new_vals)
+      else
+        remote
+      end
+
     tid_enc = Utils.encode_human(remote.tid)
 
     case CrissCrossDHT.Registry.get_pid(state.node_id_enc, Search, tid_enc) do
@@ -1416,14 +1385,14 @@ defmodule CrissCrossDHT.Server.Worker do
   end
 
   def handle_message(
-        {:get_peer_reply, remote},
+        {:get_peers_reply, remote},
         {socket, ip_vers},
         {cluster_header, _},
         ip,
         port,
         state
       ) do
-    Logger.debug("[#{Utils.encode_human(remote.node_id)}] >> get_peer_reply")
+    Logger.debug("[#{Utils.encode_human(remote.node_id)}] >> get_peers_reply")
 
     response_received(
       remote.node_id,
@@ -1434,6 +1403,37 @@ defmodule CrissCrossDHT.Server.Worker do
     )
 
     tid_enc = Utils.encode_human(remote.tid)
+
+    remote =
+      if remote.values do
+        new_vals =
+          Enum.filter(remote.values, fn
+            {_ip, _port, _meta, _ttl} ->
+              true
+
+            e ->
+              Logger.warning("Received get_peers_reply with invalid node #{inspect(e)}")
+              false
+          end)
+
+        Map.put(remote, :values, new_vals)
+      else
+        remote
+      end
+
+    if remote.values,
+      do:
+        Enum.each(remote.values, fn {ip, port, meta, ttl} ->
+          state.storage_mod.put(
+            state.storage_pid,
+            cluster_header,
+            remote.info_hash,
+            ip,
+            port,
+            meta,
+            ttl
+          )
+        end)
 
     case CrissCrossDHT.Registry.get_pid(state.node_id_enc, Search, tid_enc) do
       nil ->

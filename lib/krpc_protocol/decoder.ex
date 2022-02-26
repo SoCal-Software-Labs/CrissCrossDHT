@@ -148,14 +148,14 @@ defmodule KRPCProtocol.Decoder do
         :q => :announce_peer,
         :t => tid,
         :y => :q,
-        :a => %{
-          :id => node_id,
-          :hash => infohash,
-          :port => port,
-          :token => token,
-          :implied_port => implied_port,
-          :ttl => ttl
-        }
+        :a =>
+          %{
+            :id => node_id,
+            :hash => infohash,
+            :port => port,
+            :token => token,
+            :ttl => ttl
+          } = a
       }) do
     {:announce_peer,
      %{
@@ -163,9 +163,9 @@ defmodule KRPCProtocol.Decoder do
        node_id: node_id,
        info_hash: infohash,
        port: port,
+       meta: Map.get(a, :meta),
        ttl: ttl,
-       token: token,
-       implied_port: implied_port
+       token: token
      }}
   end
 
@@ -281,16 +281,31 @@ defmodule KRPCProtocol.Decoder do
   end
 
   ## Get_peer Reply
-  def decode(%{:y => :r, :t => tid, :r => %{:id => id, :token => t, :values => values}}) do
-    {:get_peer_reply, %{tid: tid, node_id: id, token: t, values: values, nodes: nil}}
+  def decode(%{
+        :y => :r,
+        :t => tid,
+        :r => %{:id => id, :info_hash => infohash, :token => t, :values => values}
+      }) do
+    {:get_peers_reply,
+     %{tid: tid, info_hash: infohash, node_id: id, token: t, values: values, nodes: nil}}
   end
 
-  def decode(%{:y => :r, :t => tid, :r => %{:id => id, :token => t, :nodes => nodes}}) do
-    {:get_peer_reply, %{tid: tid, node_id: id, token: t, values: nil, nodes: nodes}}
+  def decode(%{
+        :y => :r,
+        :t => tid,
+        :r => %{:id => id, :info_hash => infohash, :token => t, :nodes => nodes}
+      }) do
+    {:get_peers_reply,
+     %{tid: tid, info_hash: infohash, node_id: id, token: t, values: nil, nodes: nodes}}
   end
 
-  def decode(%{:y => :r, :t => tid, :r => %{:id => id, :token => t, :nodes6 => nodes}}) do
-    {:get_peer_reply, %{tid: tid, node_id: id, token: t, values: nil, nodes: nodes}}
+  def decode(%{
+        :y => :r,
+        :t => tid,
+        :r => %{:id => id, :info_hash => infohash, :token => t, :nodes6 => nodes}
+      }) do
+    {:get_peers_reply,
+     %{tid: tid, info_hash: infohash, node_id: id, token: t, values: nil, nodes: nodes}}
   end
 
   ## Find_node Reply
@@ -329,27 +344,6 @@ defmodule KRPCProtocol.Decoder do
   #####################
   # Private Functions #
   #####################
-
-  ## This function checks for common error.
-  defp check_errors(msg) do
-    if Map.has_key?(msg, :a) and byte_size(msg[:a][:id]) != 34 do
-      raise "Invalid node id size: #{byte_size(msg[:a][:id])}"
-    end
-
-    if Map.has_key?(msg, :r) and byte_size(msg[:r][:id]) != 34 do
-      raise "Invalid node id size: #{byte_size(msg[:r][:id])}"
-    end
-
-    if has_nodes?(msg, :nodes) and size_is_multiple_of?(msg[:r][:nodes], 26) do
-      raise "Size of IPv4 nodes is not a multiple of 26: #{byte_size(msg[:r][:nodes])}"
-    end
-
-    if has_nodes?(msg, :nodes6) and size_is_multiple_of?(msg[:r][:nodes6], 38) do
-      raise "Size of IPv6 nodes is not a multiple of 38: #{byte_size(msg[:r][:nodes6])}"
-    end
-
-    msg
-  end
 
   defp has_nodes?(msg, key), do: Map.has_key?(msg, :r) and Map.has_key?(msg[:r], key)
   defp size_is_multiple_of?(map, size), do: map |> byte_size |> rem(size) != 0
