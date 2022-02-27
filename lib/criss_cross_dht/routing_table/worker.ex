@@ -43,7 +43,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
     Logger.debug("Starting RoutingTable worker: #{inspect(opts)}")
 
     init_args = [
-      node_id: opts[:node_id],
+      node_id: :crypto.hash(:blake2s, opts[:node_id]),
       ip_tuple: opts[:ip_tuple],
       cluster: opts[:cluster],
       cluster_secret: opts[:cluster_secret],
@@ -54,6 +54,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   end
 
   def add(name, remote_node_id, address, socket) do
+    remote_node_id = :crypto.hash(:blake2s, remote_node_id)
     GenServer.cast(name, {:add, remote_node_id, address, socket})
   end
 
@@ -74,6 +75,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   end
 
   def get(name, node_id) do
+    node_id = :crypto.hash(:blake2s, node_id)
     GenServer.call(name, {:get, node_id})
   end
 
@@ -82,16 +84,20 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   end
 
   def closest_nodes(name, target, remote_node_id) do
+    target = :crypto.hash(:blake2s, target)
+    remote_node_id = :crypto.hash(:blake2s, remote_node_id)
     GenServer.call(name, {:closest_nodes, target, remote_node_id})
   end
 
   def closest_nodes(nil, _target), do: []
 
   def closest_nodes(name, target) do
+    target = :crypto.hash(:blake2s, target)
     GenServer.call(name, {:closest_nodes, target, nil})
   end
 
   def del(name, node_id) do
+    node_id = :crypto.hash(:blake2s, node_id)
     GenServer.call(name, {:del, node_id})
   end
 

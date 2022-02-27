@@ -178,13 +178,14 @@ defmodule CrissCrossDHT.Server.Worker do
   end
 
   def init(node_id: node_id, config: config) do
+    external_ip = Utils.config(config, :ipv4_addr, {127, 0, 0, 1})
     cfg_ip = Utils.config(config, :bind_ip, {127, 0, 0, 1})
     cfg_port = Utils.config(config, :port)
     dispatcher = Utils.config(config, :dispatcher)
     {storage_mod, _} = Utils.config(config, :storage)
     process_values_callback = Utils.config(config, :process_values_callback)
 
-    {socket, socket_ip, socket_port} = create_udp_socket(cfg_ip, cfg_port, dispatcher)
+    {socket, _socket_ip, socket_port} = create_udp_socket(cfg_ip, cfg_port, dispatcher)
 
     Process.send_after(self(), :cluster_secret, @time_cluster_secret)
     Process.send_after(self(), :reannounce, @reannounce_interval)
@@ -206,14 +207,16 @@ defmodule CrissCrossDHT.Server.Worker do
       config: config,
       self_pid: self(),
       cache: cache,
-      ip_tuple: {socket_ip, socket_port},
+      ip_tuple: {external_ip, socket_port},
       storage_mod: storage_mod,
       storage_pid: storage_pid,
       process_values_callback: process_values_callback,
       bootstrap_overlay: config.bootstrap_overlay
     }
 
-    send(self(), {:start_rtable, socket_ip, cfg_port})
+    Logger.info("Registering address #{Utils.tuple_to_ipstr(external_ip, socket_port)}")
+
+    send(self(), {:start_rtable, external_ip, cfg_port})
     {:ok, state}
   end
 

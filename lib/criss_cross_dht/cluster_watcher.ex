@@ -8,8 +8,9 @@ defmodule CrissCrossDHT.ClusterWatcher do
   @cypher "9YtgMwxnoSagovuViBbJ33drDaPpC6Mc2pVDpMLS8erc"
   @public_key "2bDkyNhW9LBRtCsH9xuRRKmvWJtL7QjJ3mao1FkDypmn8kmViGsarw4"
 
+  @cluster_raw Utils.hash(Utils.combine_to_sign([@cypher, @public_key]))
   # "2UPhq1AXgmhSd6etUcSQRPfm42mSREcjUixSgi9N8nU1YoC"
-  @cluster_name Utils.encode_human(Utils.hash(Utils.combine_to_sign([@cypher, @public_key])))
+  @cluster_name Utils.encode_human(@cluster_raw)
   @max_default_overlay_ttl 45 * 60 * 60 * 1000
 
   def start_link(path) do
@@ -22,6 +23,8 @@ defmodule CrissCrossDHT.ClusterWatcher do
     clusters = read_clusters(path)
     {:ok, %{watcher_pid: watcher_pid, clusters: clusters}}
   end
+
+  def default_cluster(), do: @cluster_raw
 
   def get_cluster(cluster_id),
     do: GenServer.call(__MODULE__, {:get_cluster, cluster_id}, :infinity)

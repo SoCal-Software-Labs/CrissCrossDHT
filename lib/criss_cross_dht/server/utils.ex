@@ -82,8 +82,8 @@ defmodule CrissCrossDHT.Server.Utils do
   def hash(s) do
     size = byte_size(s)
 
-    if size < 31 do
-      <<0x01, 32::integer-size(8), size>> <> String.ljust(s, 31, ?-)
+    if size < 80 do
+      <<0x01, 32::integer-size(8), size>> <> s
     else
       {:ok, hash} = Multihash.encode(:blake2s, :crypto.hash(:blake2s, s))
       hash

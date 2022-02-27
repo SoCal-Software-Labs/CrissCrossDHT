@@ -74,9 +74,9 @@ defmodule CrissCrossDHT.RoutingTable.Distance do
   and the last bits it will generate randomly.
   """
   def gen_node_id(nr_of_bits, node_id) do
-    nr_rest_bits = 272 - nr_of_bits
+    nr_rest_bits = 32 * 8 - nr_of_bits
     <<bits::size(nr_of_bits), _::size(nr_rest_bits)>> = node_id
-    <<rest::size(nr_rest_bits), _::size(nr_of_bits)>> = :crypto.strong_rand_bytes(34)
+    <<rest::size(nr_rest_bits), _::size(nr_of_bits)>> = :crypto.strong_rand_bytes(32)
 
     <<bits::size(nr_of_bits), rest::size(nr_rest_bits)>>
   end
