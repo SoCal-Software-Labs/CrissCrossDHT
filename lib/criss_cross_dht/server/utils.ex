@@ -1,4 +1,6 @@
 defmodule CrissCrossDHT.Server.Utils do
+  require Logger
+
   @moduledoc false
 
   @doc ~S"""
@@ -28,6 +30,24 @@ defmodule CrissCrossDHT.Server.Utils do
       |> List.to_string()
 
     "[#{ip_str}]:#{port}"
+  end
+
+  def resolve_hostnames(list, inet), do: resolve_hostnames(list, inet, [])
+  def resolve_hostnames([], _inet, result), do: result
+
+  def resolve_hostnames([{id, host, port} | tail], inet, result) when is_tuple(host) do
+    resolve_hostnames(tail, inet, result ++ [{id, host, port}])
+  end
+
+  def resolve_hostnames([{id, host, port} | tail], inet, result) when is_binary(host) do
+    case :inet.getaddr(String.to_charlist(host), :inet) do
+      {:ok, ip_addr} ->
+        resolve_hostnames(tail, inet, result ++ [{id, ip_addr, port}])
+
+      {:error, code} ->
+        Logger.error("Couldn't resolve the hostname: #{host} (reason: #{code})")
+        resolve_hostnames(tail, inet, result)
+    end
   end
 
   @doc ~S"""

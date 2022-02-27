@@ -529,14 +529,14 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   """
   def get_node(cache, node_id) do
     case :ets.lookup(cache, node_id) do
-      [{_node_id, pid}] -> pid
+      [{_node_id, pid} | _] -> pid
       [] -> nil
     end
   end
 
   def get_node_ip(cache_ip, ip_tuple) do
     case :ets.lookup(cache_ip, ip_tuple) do
-      [{_node_id, pid}] -> pid
+      [{_node_id, pid} | _] -> pid
       [] -> nil
     end
   end

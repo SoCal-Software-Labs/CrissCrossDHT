@@ -271,7 +271,7 @@ defmodule CrissCrossDHT.Server.DHTSled do
             [{ip, port, meta, ttl}]
           rescue
             ArgumentError ->
-              Logger.error("Could not decode member from db")
+              Logger.error("Could not decode member from db, #{inspect(right)}")
               []
           end
 

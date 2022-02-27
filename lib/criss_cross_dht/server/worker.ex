@@ -560,7 +560,7 @@ defmodule CrissCrossDHT.Server.Worker do
     {:noreply, state}
   end
 
-  def handle_info({:bootstrap_clusters, do_again}, state) do
+  def handle_info({:bootstrap_clusters, do_again}, %{ip_tuple: {_, port}} = state) do
     Logger.debug("Searching for new nodes for clusters")
     worker_pid = self()
 
@@ -582,8 +582,13 @@ defmodule CrissCrossDHT.Server.Worker do
             pid = self()
 
             callback = fn
-              :done -> send(pid, {ref, :done})
-              node -> send(pid, {ref, node})
+              :done ->
+                send(pid, {ref, :done})
+
+              {ip, port, _meta, _ttl} = node ->
+                if state.ip_tuple != {ip, port} do
+                  send(pid, {ref, node})
+                end
             end
 
             ttl = Utils.adjust_ttl(@bootstrap_cluster_interval * 5)
@@ -602,7 +607,7 @@ defmodule CrissCrossDHT.Server.Worker do
               target: cluster_header,
               start_nodes: nodes,
               callback: callback,
-              port: 0,
+              port: port,
               meta: nil,
               announce: true,
               ttl: ttl
@@ -625,8 +630,8 @@ defmodule CrissCrossDHT.Server.Worker do
                 {^ref, :done} ->
                   {:halt, acc}
 
-                {^ref, ip_tuple} ->
-                  node = CrissCrossDHT.RoutingTable.Worker.get_by_ip(rtable, ip_tuple)
+                {^ref, {ip, port, _meta, _ttl}} ->
+                  node = CrissCrossDHT.RoutingTable.Worker.get_by_ip(rtable, {ip, port})
 
                   case node do
                     nil -> {:cont, acc}
@@ -639,6 +644,8 @@ defmodule CrissCrossDHT.Server.Worker do
           end)
 
         bootstrap_nodes = Task.await(task)
+
+        Logger.debug("Bootstrapping with #{inspect(bootstrap_nodes)}")
 
         state.node_id_enc
         |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.Search.Supervisor)
@@ -1638,7 +1645,7 @@ defmodule CrissCrossDHT.Server.Worker do
     ## Get the nodes which are defined as bootstrapping nodes in the config
     nodes =
       Utils.config(state.config, :bootstrap_nodes)
-      |> resolve_hostnames(inet)
+      |> Utils.resolve_hostnames(inet)
 
     Logger.debug("nodes: #{inspect(nodes)}")
 
@@ -1652,27 +1659,6 @@ defmodule CrissCrossDHT.Server.Worker do
       state.cluster_mod.get_cluster(state.bootstrap_overlay)
     )
     |> Search.find_node(state.bootstrap_overlay, target: state.node_id, start_nodes: nodes)
-  end
-
-  ## function iterates over a list of bootstrapping nodes and tries to
-  ## resolve the hostname of each node. If a node is not resolvable the function
-  ## removes it; if is resolvable it replaces the hostname with the IP address.
-  defp resolve_hostnames(list, inet), do: resolve_hostnames(list, inet, [])
-  defp resolve_hostnames([], _inet, result), do: result
-
-  defp resolve_hostnames([{id, host, port} | tail], inet, result) when is_tuple(host) do
-    resolve_hostnames(tail, inet, result ++ [{id, host, port}])
-  end
-
-  defp resolve_hostnames([{id, host, port} | tail], inet, result) when is_binary(host) do
-    case :inet.getaddr(String.to_charlist(host), :inet) do
-      {:ok, ip_addr} ->
-        resolve_hostnames(tail, inet, result ++ [{id, ip_addr, port}])
-
-      {:error, code} ->
-        Logger.error("Couldn't resolve the hostname: #{host} (reason: #{code})")
-        resolve_hostnames(tail, inet, result)
-    end
   end
 
   defp send_ping_reply(node_id, tid, {cluster_header, %{cypher: cypher}}, ip, port, socket) do
@@ -1699,7 +1685,7 @@ defmodule CrissCrossDHT.Server.Worker do
       CrissCrossDHT.RoutingTable.Worker.update_bucket(rtable, index)
     else
       Logger.info(
-        "Hello #{Utils.encode_human(cluster)} #{Utils.encode_human(node_id)} @ #{Utils.tuple_to_ipstr(ip, port)}"
+        "Hello #{Utils.encode_human(remote_node_id)}@#{Utils.encode_human(cluster)} @ #{Utils.tuple_to_ipstr(ip, port)}"
       )
 
       CrissCrossDHT.RoutingTable.Worker.add(rtable, remote_node_id, ip_port, socket)
@@ -1721,7 +1707,7 @@ defmodule CrissCrossDHT.Server.Worker do
       CrissCrossDHT.RoutingTable.Worker.update_bucket(rtable, index)
     else
       Logger.info(
-        "Hello #{Utils.encode_human(cluster)} #{Utils.encode_human(node_id)} @ #{Utils.tuple_to_ipstr(ip, port)}"
+        "Hello #{Utils.encode_human(remote_node_id)}@#{Utils.encode_human(cluster)} @ #{Utils.tuple_to_ipstr(ip, port)}"
       )
 
       CrissCrossDHT.RoutingTable.Worker.add(rtable, remote_node_id, ip_port, socket)
