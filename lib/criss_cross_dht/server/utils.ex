@@ -79,11 +79,11 @@ defmodule CrissCrossDHT.Server.Utils do
   end
 
   @compile {:inline, hash: 1}
-  def hash(s) do
+  def hash(s, max_size \\ 32) do
     size = byte_size(s)
 
-    if size < 80 do
-      <<0x01, 32::integer-size(8), size>> <> s
+    if size < max_size do
+      <<0x01, size::integer-size(8)>> <> s
     else
       {:ok, hash} = Multihash.encode(:blake2s, :crypto.hash(:blake2s, s))
       hash

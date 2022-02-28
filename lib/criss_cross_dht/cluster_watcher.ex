@@ -5,13 +5,11 @@ defmodule CrissCrossDHT.ClusterWatcher do
 
   alias CrissCrossDHT.Server.Utils
 
-  @cypher "9YtgMwxnoSagovuViBbJ33drDaPpC6Mc2pVDpMLS8erc"
-  @public_key "2bDkyNhW9LBRtCsH9xuRRKmvWJtL7QjJ3mao1FkDypmn8kmViGsarw4"
-
-  @cluster_raw Utils.hash(Utils.combine_to_sign([@cypher, @public_key]))
-  # "2UPhq1AXgmhSd6etUcSQRPfm42mSREcjUixSgi9N8nU1YoC"
-  @cluster_name Utils.encode_human(@cluster_raw)
-  @max_default_overlay_ttl 45 * 60 * 60 * 1000
+  @cypher "AKBLm4Y4XA42EL7Q8Yx4SeP7zrh8K16EQd7fdbRGX2h1"
+  @public_key "2bDkyNhW9LBUHKupmDCkVVpYgcDU3Y95bJHxpwAEi7CusNia7dxoFYn"
+  @cluster_name "2UPm6jo6SNfDQwc8Xa5BgBqw6NNubP3eqexN57oNwdxV3md"
+  @cluster_raw Utils.decode_human!(@cluster_name)
+  @max_default_overlay_ttl 24 * 60 * 60 * 60 * 1000
 
   def start_link(path) do
     GenServer.start_link(__MODULE__, path, name: __MODULE__)

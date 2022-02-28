@@ -16,7 +16,7 @@ defmodule CrissCrossDHT.Server.DHTRedis do
   @review_time 5 * @min_in_ms
 
   ## 60 Minutes
-  @node_reannounce 1000 * 60 * @min_in_ms
+  @node_reannounce 60 * @min_in_ms
 
   def start_link(opts) do
     {redis_opts, opts} = Keyword.pop(opts, :redis_opts)
@@ -198,12 +198,10 @@ defmodule CrissCrossDHT.Server.DHTRedis do
   def handle_info(:review_storage, %{conn: conn} = state) do
     Logger.debug("Review storage")
 
-    ## Restart review timer
-    Process.send_after(self(), :review_storage, @review_time)
-
     :ok = scan_keys(conn, "0")
     :ok = scan_announce(conn, "0")
-
+    ## Restart review timer
+    Process.send_after(self(), :review_storage, @review_time)
     {:noreply, state}
   end
 
