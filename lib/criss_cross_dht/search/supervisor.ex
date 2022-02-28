@@ -30,6 +30,7 @@ defmodule CrissCrossDHT.Search.Supervisor do
            type: type,
            socket: socket,
            node_id: node_id,
+           ip_tuple: ip_tuple,
            clusters: cluster_config,
            tid: tid}
         )

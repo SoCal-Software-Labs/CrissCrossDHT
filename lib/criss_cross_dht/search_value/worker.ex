@@ -164,17 +164,19 @@ defmodule CrissCrossDHT.SearchValue.Worker do
     old_nodes = update_responded_node(state.nodes, remote)
 
     new_nodes =
-      Enum.map(nodes, fn
+      Enum.flat_map(nodes, fn
         {id, ip, port} ->
-          unless Enum.find(state.nodes, fn x -> x.id == id or {ip, port} == state.ip_tuple end) do
-            %Node{id: id, ip: ip, port: port}
+          if Enum.find(state.nodes, fn x -> x.id == id end) == nil and
+               {ip, port} != state.ip_tuple and state.node_id != id do
+            [%Node{id: id, ip: ip, port: port}]
+          else
+            []
           end
 
         other ->
           Logger.warn("Remote node sent invalid node reply #{inspect(other)}")
-          nil
+          []
       end)
-      |> Enum.filter(fn x -> x != nil end)
 
     new_state = %{state | nodes: old_nodes ++ new_nodes}
 

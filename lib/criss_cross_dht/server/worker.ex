@@ -235,6 +235,7 @@ defmodule CrissCrossDHT.Server.Worker do
          infohash
        ) do
       values = state.storage_mod.get_nodes(state.storage_pid, cluster_header, infohash)
+
       Enum.map(values, callback)
     end
   end
@@ -795,7 +796,16 @@ defmodule CrissCrossDHT.Server.Worker do
     Logger.debug("[#{Utils.encode_human(remote.node_id)}] >> ping")
     query_received(remote.node_id, state.node_id, {ip, port}, cluster_header, {socket, ip_vers})
 
-    send_ping_reply(state.node_id, remote.tid, {cluster_header, cluster_secret}, ip, port, socket)
+    if remote.node_id != state.node_id do
+      send_ping_reply(
+        state.node_id,
+        remote.tid,
+        {cluster_header, cluster_secret},
+        ip,
+        port,
+        socket
+      )
+    end
 
     {:noreply, state}
   end
@@ -1317,8 +1327,11 @@ defmodule CrissCrossDHT.Server.Worker do
     payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
 
     Enum.each(remote.nodes, fn node_tuple ->
-      {_id, ip, port} = node_tuple
-      UDPQuic.send(socket, ip, port, payload)
+      {id, ip, port} = node_tuple
+
+      if id != state.node_id do
+        UDPQuic.send(socket, ip, port, payload)
+      end
     end)
 
     {:noreply, state}
@@ -1687,11 +1700,13 @@ defmodule CrissCrossDHT.Server.Worker do
       index = Node.bucket_index(node_pid)
       CrissCrossDHT.RoutingTable.Worker.update_bucket(rtable, index)
     else
-      Logger.info(
-        "Hello #{Utils.encode_human(remote_node_id)}@#{Utils.encode_human(cluster)} @ #{Utils.tuple_to_ipstr(ip, port)}"
-      )
+      if remote_node_id != node_id do
+        Logger.info(
+          "Hello #{Utils.encode_human(remote_node_id)}@#{Utils.encode_human(cluster)} @ #{Utils.tuple_to_ipstr(ip, port)}"
+        )
 
-      CrissCrossDHT.RoutingTable.Worker.add(rtable, remote_node_id, ip_port, socket)
+        CrissCrossDHT.RoutingTable.Worker.add(rtable, remote_node_id, ip_port, socket)
+      end
     end
   end
 
@@ -1709,11 +1724,13 @@ defmodule CrissCrossDHT.Server.Worker do
       index = Node.bucket_index(node_pid)
       CrissCrossDHT.RoutingTable.Worker.update_bucket(rtable, index)
     else
-      Logger.info(
-        "Hello #{Utils.encode_human(remote_node_id)}@#{Utils.encode_human(cluster)} @ #{Utils.tuple_to_ipstr(ip, port)}"
-      )
+      if remote_node_id != node_id do
+        Logger.info(
+          "Hello #{Utils.encode_human(remote_node_id)}@#{Utils.encode_human(cluster)} @ #{Utils.tuple_to_ipstr(ip, port)}"
+        )
 
-      CrissCrossDHT.RoutingTable.Worker.add(rtable, remote_node_id, ip_port, socket)
+        CrissCrossDHT.RoutingTable.Worker.add(rtable, remote_node_id, ip_port, socket)
+      end
     end
   end
 
