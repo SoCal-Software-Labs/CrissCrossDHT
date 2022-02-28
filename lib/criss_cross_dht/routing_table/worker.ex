@@ -44,6 +44,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
 
     init_args = [
       node_id: :crypto.hash(:blake2s, opts[:node_id]),
+      original_node_id: opts[:node_id],
       ip_tuple: opts[:ip_tuple],
       cluster: opts[:cluster],
       cluster_secret: opts[:cluster_secret],
@@ -107,6 +108,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
 
   def init(
         node_id: node_id,
+        original_node_id: original_node_id,
         ip_tuple: ip_tuple,
         cluster: cluster,
         cluster_secret: cluster_secret,
@@ -136,7 +138,8 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
     {:ok,
      %{
        node_id: node_id,
-       node_id_enc: Utils.encode_human(node_id),
+       original_node_id: original_node_id,
+       node_id_enc: Utils.encode_human(original_node_id),
        rt_name: rt_name,
        buckets: [Bucket.new(0)],
        cache: :ets.new(ets_name, [:set, :protected]),
@@ -412,8 +415,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
         node_child = {Node, own_node_id: my_node_id, node_tuple: node_tuple, bucket_index: index}
 
         {:ok, pid} =
-          my_node_id
-          |> Utils.encode_human()
+          state.node_id_enc
           |> CrissCrossDHT.Registry.get_pid(
             CrissCrossDHT.RoutingTable.NodeSupervisor,
             state.rt_name
@@ -428,7 +430,10 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
       ## If the bucket is full and the node would belong to a bucket that is far
       ## away from us, we will just drop that node. Go away you filthy node!
       Bucket.is_full?(bucket) and index != index_last_bucket(buckets) ->
-        Logger.debug("Bucket #{index} is full -> drop #{Utils.encode_human(node_id)}")
+        Logger.debug(
+          "Bucket #{index} is full -> drop #{Utils.encode_human(state.original_node_id)}"
+        )
+
         state
 
       ## If the bucket is full but the node is closer to us, we will reorganize
