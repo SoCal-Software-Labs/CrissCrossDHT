@@ -12,7 +12,7 @@ defmodule KRPCProtocol.Decoder do
         error in RuntimeError ->
           {:invalid, error.message}
 
-        error in _ ->
+        _error in _ ->
           {:invalid, "Invalid becoded payload: #{inspect(payload)}"}
       end
 
@@ -167,22 +167,6 @@ defmodule KRPCProtocol.Decoder do
        ttl: ttl,
        token: token
      }}
-  end
-
-  def decode(%{
-        :q => :announce_peer,
-        :t => tid,
-        :y => :q,
-        :a => %{
-          :id => node_id,
-          :hash => infohash,
-          :port => port,
-          :token => token,
-          :ttl => ttl
-        }
-      }) do
-    {:announce_peer,
-     %{tid: tid, node_id: node_id, info_hash: infohash, port: port, ttl: ttl, token: token}}
   end
 
   def decode(%{
@@ -344,9 +328,6 @@ defmodule KRPCProtocol.Decoder do
   #####################
   # Private Functions #
   #####################
-
-  defp has_nodes?(msg, key), do: Map.has_key?(msg, :r) and Map.has_key?(msg[:r], key)
-  defp size_is_multiple_of?(map, size), do: map |> byte_size |> rem(size) != 0
 
   ## This functions gets a binary and extracts the IPv4/IPv6 address and the
   ## port and returns it as a tuple in the following format: {{127, 0, 0, 1}, 80}

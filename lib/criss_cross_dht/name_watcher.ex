@@ -4,7 +4,6 @@ defmodule CrissCrossDHT.NameWatcher do
   require Logger
 
   import CrissCrossDHT.Server.Utils
-  alias CrissCrossDHT.Server.Utils
 
   def start_link(path) do
     GenServer.start_link(__MODULE__, path, name: __MODULE__)

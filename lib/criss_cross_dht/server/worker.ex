@@ -328,15 +328,15 @@ defmodule CrissCrossDHT.Server.Worker do
   end
 
   def handle_cast(
-        {:store_name, cluster_header, rsa_priv_name_key, key_string, public_key_hash, name, value,
-         local, remote, ttl, tid},
+        {:store_name, cluster_header, rsa_priv_name_key, key_string, _public_key_hash, name,
+         value, local, remote, ttl, tid},
         state
       ) do
     # TODO What about ipv6?
     Logger.debug("[*] >> store_name")
 
     case state.cluster_mod.get_cluster(cluster_header) do
-      %{private_key: rsa_priv_key, cypher: cypher} = cluster_secret
+      %{private_key: rsa_priv_key}
       when not is_nil(rsa_priv_key) ->
         {:ok, signature} = Utils.sign(value, rsa_priv_key)
 
@@ -345,7 +345,7 @@ defmodule CrissCrossDHT.Server.Worker do
             nil ->
               {0, Utils.combine_to_sign([ttl, 0, signature])}
 
-            {value, generation, _ttl, _key, _signature_cluster, _signature} ->
+            {_value, generation, _ttl, _key, _signature_cluster, _signature} ->
               {generation + 1, Utils.combine_to_sign([ttl, generation + 1, signature])}
           end
 
@@ -367,7 +367,7 @@ defmodule CrissCrossDHT.Server.Worker do
 
         if remote do
           GenServer.cast(
-            self,
+            self(),
             {:broadcast_name, cluster_header, tid, name, value, ttl, key_string, generation,
              signature, signature_ns}
           )
@@ -537,6 +537,55 @@ defmodule CrissCrossDHT.Server.Worker do
     {:noreply, state}
   end
 
+  def handle_info(:cluster_secret, state) do
+    Logger.debug("Change Secret")
+    Process.send_after(self(), :cluster_secret, @time_cluster_secret)
+
+    {:noreply, %{state | old_secret: state.secret, secret: Utils.gen_secret()}}
+  end
+
+  def handle_info({:udp, socket, ip, port, raw_data}, state) do
+    if {ip, port} != state.ip_tuple do
+      Task.start(fn ->
+        {cluster_header, body} =
+          raw_data
+          |> Utils.unwrap()
+
+        case state.cluster_mod.get_cluster(cluster_header) do
+          %{cypher: cypher} = cluster_secret ->
+            decrypted = Utils.decrypt(body, cypher)
+
+            case decrypted do
+              c when is_binary(c) ->
+                c
+                |> String.trim_trailing("\n")
+                |> KRPCProtocol.decode()
+                |> handle_message(
+                  {socket, :ipv4},
+                  {cluster_header, cluster_secret},
+                  ip,
+                  port,
+                  state
+                )
+
+              e ->
+                Logger.error("Error decrypting: #{inspect(e)}")
+                {:noreply, state}
+            end
+
+          _ ->
+            Logger.warning(
+              "Could not find cluster configured #{Utils.encode_human(cluster_header)}"
+            )
+
+            {:noreply, state}
+        end
+      end)
+    end
+
+    {:noreply, state}
+  end
+
   def handle_info(:reannounce, state) do
     Logger.debug("Reannouncing trees to peers")
 
@@ -700,55 +749,6 @@ defmodule CrissCrossDHT.Server.Worker do
     node_id |> get_rtable(header, rt_ident)
   end
 
-  def handle_info(:cluster_secret, state) do
-    Logger.debug("Change Secret")
-    Process.send_after(self(), :cluster_secret, @time_cluster_secret)
-
-    {:noreply, %{state | old_secret: state.secret, secret: Utils.gen_secret()}}
-  end
-
-  def handle_info({:udp, socket, ip, port, raw_data}, state) do
-    if {ip, port} != state.ip_tuple do
-      Task.start(fn ->
-        {cluster_header, body} =
-          raw_data
-          |> Utils.unwrap()
-
-        case state.cluster_mod.get_cluster(cluster_header) do
-          %{cypher: cypher} = cluster_secret ->
-            decrypted = Utils.decrypt(body, cypher)
-
-            case decrypted do
-              c when is_binary(c) ->
-                c
-                |> String.trim_trailing("\n")
-                |> KRPCProtocol.decode()
-                |> handle_message(
-                  {socket, :ipv4},
-                  {cluster_header, cluster_secret},
-                  ip,
-                  port,
-                  state
-                )
-
-              e ->
-                Logger.error("Error decrypting: #{inspect(e)}")
-                {:noreply, state}
-            end
-
-          _ ->
-            Logger.warning(
-              "Could not find cluster configured #{Utils.encode_human(cluster_header)}"
-            )
-
-            {:noreply, state}
-        end
-      end)
-    end
-
-    {:noreply, state}
-  end
-
   #########
   # Error #
   #########
@@ -774,7 +774,7 @@ defmodule CrissCrossDHT.Server.Worker do
     {:noreply, state}
   end
 
-  def handle_message({:invalid, msg}, _socket, _ip, _port, state) do
+  def handle_message({:invalid, msg}, _socket, _, _ip, _port, state) do
     Logger.error("Ignore unknown or corrupted message: #{inspect(msg, limit: 5000)}")
     ## Maybe we should blacklist this filthy peer?
 
@@ -1652,9 +1652,6 @@ defmodule CrissCrossDHT.Server.Worker do
   #####################
   # Private Functions #
   #####################
-
-  defp maybe_put(list, _name, nil), do: list
-  defp maybe_put(list, name, value), do: list ++ [{name, value}]
 
   ## This function starts a search with the bootstrapping nodes.
   defp bootstrap(state, {socket, inet}) do

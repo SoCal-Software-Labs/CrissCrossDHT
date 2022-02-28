@@ -386,13 +386,11 @@ defmodule CrissCrossDHT.Server.DHTSled do
       SortedSetKV.zrangebyscore(conn, "treeclock", 0, :os.system_time(:millisecond), 0, 100)
 
     for bin <- infohashes do
-      now = :os.system_time(:millisecond)
-
       {cluster, infohash} = :erlang.binary_to_term(bin)
 
       case SortedSetKV.zgetbykey(conn, "treeclock", bin, :os.system_time(:millisecond)) do
         b when is_binary(b) ->
-          {ip, port, ttl} = :erlang.binary_to_term(b)
+          {_ip, port, ttl} = :erlang.binary_to_term(b)
 
           Logger.debug(
             "Reannouncing #{CrissCrossDHT.Server.Utils.encode_human(cluster)} #{CrissCrossDHT.Server.Utils.encode_human(infohash)}"

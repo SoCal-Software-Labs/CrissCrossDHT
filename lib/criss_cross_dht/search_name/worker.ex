@@ -149,7 +149,7 @@ defmodule CrissCrossDHT.SearchName.Worker do
     end
   end
 
-  def handle_cast({:handle_reply, remote, key, value, generation}, state) do
+  def handle_cast({:handle_reply, remote, key, value, _generation}, state) do
     old_nodes = update_responded_node(state.nodes, remote)
 
     # TODO: Verify value with public key

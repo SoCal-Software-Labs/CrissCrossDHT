@@ -15,8 +15,6 @@ defmodule CrissCrossDHT.Server.Utils do
   @aad "AES256GCM"
   @schnorr_context "CrissCross-DHT"
 
-  alias CrissCrossDHT.Server.Storage
-
   def tuple_to_ipstr({oct1, oct2, oct3, oct4}, port) do
     "#{oct1}.#{oct2}.#{oct3}.#{oct4}:#{port}"
   end
@@ -201,14 +199,14 @@ defmodule CrissCrossDHT.Server.Utils do
     do_decrypt(payload, secret)
   end
 
-  def verify_signature(nil, value, signature), do: false
+  def verify_signature(nil, _value, _signature), do: false
 
   def verify_signature(pub_key, msg, signature) do
     case ExSchnorr.verify(pub_key, msg, signature, @schnorr_context) do
       {:ok, true} ->
         true
 
-      e ->
+      _e ->
         false
     end
   end
@@ -265,7 +263,7 @@ defmodule CrissCrossDHT.Server.Utils do
 
   def check_generation(storage_mod, storage_pid, cluster, name, generation) do
     case storage_mod.get_name(storage_pid, cluster, name) do
-      {value, saved_gen} -> saved_gen < generation
+      {_value, saved_gen} -> saved_gen < generation
       _ -> true
     end
   end
