@@ -88,8 +88,7 @@ defmodule CrissCrossDHT.NameWatcher do
         end
 
       e ->
-        IO.inspect(e)
-        Logger.error("Invalid yaml file #{name_file}")
+        Logger.error("Invalid yaml file #{name_file}, #{inspect(e)}")
         []
     end
   end

@@ -32,7 +32,7 @@ defmodule CrissCrossDHT.Mixfile do
       {:redix, github: "SoCal-Software-Labs/safe-redix"},
       {:cachex, "~> 3.4.0"},
       {:ex_p2p,
-       github: "SoCal-Software-Labs/ExP2P", ref: "9014adc30e44e37a5b22874886d345e59b74f328"},
+       github: "SoCal-Software-Labs/ExP2P", ref: "1da474af2fdad0cb3a4215b1e36119ea72e72bd2"},
       {:yaml_elixir, "~> 2.8"},
       {:file_system, "~> 0.2.10"}
     ]
