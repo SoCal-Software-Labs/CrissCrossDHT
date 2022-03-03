@@ -28,7 +28,7 @@ defmodule CrissCrossDHT.Mixfile do
       {:pretty_hex, "~> 0.0.1", only: :dev},
       {:dialyxir, "~> 0.5.1", only: [:dev, :test]},
       {:ex_multihash, "~> 2.0"},
-      {:sorted_set_kv, "~> 0.1.2"},
+      {:sorted_set_kv, "~> 0.1.3"},
       {:redix, github: "SoCal-Software-Labs/safe-redix"},
       {:cachex, "~> 3.4.0"},
       # {:ex_p2p, path: "../ex_p2p"},
