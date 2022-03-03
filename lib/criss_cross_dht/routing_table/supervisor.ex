@@ -28,6 +28,7 @@ defmodule CrissCrossDHT.RoutingTable.Supervisor do
       {CrissCrossDHT.RoutingTable.Worker,
        rt_name: rt_name,
        node_id: node_id,
+       node_id_enc: node_id_enc,
        cluster: cluster,
        cluster_secret: cluster_secret,
        ip_tuple: ip_tuple,

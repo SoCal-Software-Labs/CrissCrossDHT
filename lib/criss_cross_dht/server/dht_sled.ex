@@ -1,8 +1,9 @@
 defmodule CrissCrossDHT.Server.DHTSled do
   @moduledoc false
 
-  @node_reannounce 10_000
-  @tree_reannounce 10_000
+  @node_reannounce :timer.minutes(10)
+  @tree_reannounce :timer.minutes(10)
+  @max_announce_broadcast_ttl :timer.minutes(30)
 
   defmodule TTLCleanup do
     use GenServer
@@ -64,7 +65,7 @@ defmodule CrissCrossDHT.Server.DHTSled do
     Agent.start_link(fn -> sled_conn end, opts)
   end
 
-  def queue_announce(conn, cluster, infohash, ip, port, ttl) do
+  def queue_announce(conn, cluster, infohash, ip, port, meta, ttl) do
     ttl =
       if ttl == -1 do
         18_446_744_073_709_551_615
@@ -79,7 +80,7 @@ defmodule CrissCrossDHT.Server.DHTSled do
         Agent.get(conn, fn l -> l end),
         "treeclock",
         :erlang.term_to_binary({cluster, infohash}),
-        :erlang.term_to_binary({ip, port, ttl}),
+        :erlang.term_to_binary({ip, port, ttl, meta}),
         next_time,
         true
       )
@@ -121,6 +122,7 @@ defmodule CrissCrossDHT.Server.DHTSled do
 
   def put(conn, cluster, infohash, ip, port, meta, ttl) do
     bin = :erlang.term_to_binary({ip, port})
+    ttl = min(@max_announce_broadcast_ttl, ttl)
 
     :ok =
       SortedSetKV.zadd(
@@ -289,7 +291,7 @@ defmodule CrissCrossDHT.Server.DHTSled do
            conn,
            "values",
            Enum.join([cluster, infohash], "-"),
-           :os.system_time(:millisecond)
+           0
          ) do
       {value, _} -> value
       _ -> nil
@@ -303,7 +305,7 @@ defmodule CrissCrossDHT.Server.DHTSled do
            conn,
            "names",
            Enum.join([cluster, infohash], "-"),
-           :os.system_time(:millisecond)
+           0
          ) do
       {value, _} when is_binary(value) -> :erlang.binary_to_term(value)
       _ -> nil
@@ -344,7 +346,7 @@ defmodule CrissCrossDHT.Server.DHTSled do
       {cluster, name} = :erlang.binary_to_term(bin)
       key = Enum.join([cluster, name], "-")
 
-      case SortedSetKV.zgetbykey(conn, "names", key, :os.system_time(:millisecond)) do
+      case SortedSetKV.zgetbykey(conn, "names", key, 0) do
         b when is_binary(b) ->
           {value, generation, ttl, public_key, signature_cluster, signature_name} =
             :erlang.binary_to_term(b)
@@ -388,9 +390,9 @@ defmodule CrissCrossDHT.Server.DHTSled do
     for bin <- infohashes do
       {cluster, infohash} = :erlang.binary_to_term(bin)
 
-      case SortedSetKV.zgetbykey(conn, "treeclock", bin, :os.system_time(:millisecond)) do
-        b when is_binary(b) ->
-          {_ip, port, ttl} = :erlang.binary_to_term(b)
+      case SortedSetKV.zgetbykey(conn, "treeclock", bin, 0) do
+        {b, _} when is_binary(b) ->
+          {_ip, port, ttl, meta} = :erlang.binary_to_term(b)
 
           Logger.debug(
             "Reannouncing #{CrissCrossDHT.Server.Utils.encode_human(cluster)} #{CrissCrossDHT.Server.Utils.encode_human(infohash)}"
@@ -398,10 +400,10 @@ defmodule CrissCrossDHT.Server.DHTSled do
 
           GenServer.cast(
             worker_conn,
-            {:search_announce, cluster, infohash, fn _ -> :ok end, ttl, port}
+            {:search_announce, cluster, infohash, fn _ -> :ok end, ttl, port, meta}
           )
 
-        _ ->
+        nil ->
           :ok
       end
     end

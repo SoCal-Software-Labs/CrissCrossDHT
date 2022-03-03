@@ -2,6 +2,7 @@ defmodule CrissCrossDHT.Search.Node do
   @moduledoc false
 
   defstruct id: nil,
+            hashed_id: nil,
             ip: nil,
             port: nil,
             token: nil,

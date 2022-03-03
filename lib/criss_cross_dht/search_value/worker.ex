@@ -90,7 +90,7 @@ defmodule CrissCrossDHT.SearchValue.Worker do
   end
 
   def handle_info({:search_iterate, cluster_info}, state) do
-    if state.completed or search_completed?(state.nodes, state.target) do
+    if state.completed or search_completed?(state.nodes, state.hashed_target) do
       Logger.debug("SearchValue is complete")
 
       if not state.completed do
@@ -102,7 +102,7 @@ defmodule CrissCrossDHT.SearchValue.Worker do
       ## Send queries to the 3 closest nodes
       new_state =
         state.nodes
-        |> Distance.closest_nodes(state.target)
+        |> Distance.closest_nodes(state.hashed_target)
         |> Enum.filter(fn x ->
           x.responded == false and
             x.requested < 3 and
@@ -144,6 +144,7 @@ defmodule CrissCrossDHT.SearchValue.Worker do
         {:noreply, state}
 
       cluster_info ->
+        args = Keyword.put(args, :hashed_target, Utils.simple_hash(args[:target]))
         new_state = start_search(:find_value, args, cluster_info, state)
         {:noreply, new_state}
     end
@@ -168,7 +169,7 @@ defmodule CrissCrossDHT.SearchValue.Worker do
         {id, ip, port} ->
           if Enum.find(state.nodes, fn x -> x.id == id end) == nil and
                {ip, port} != state.ip_tuple and state.node_id != id do
-            [%Node{id: id, ip: ip, port: port}]
+            [%Node{id: id, hashed_id: Utils.simple_hash(id), ip: ip, port: port}]
           else
             []
           end
@@ -180,7 +181,7 @@ defmodule CrissCrossDHT.SearchValue.Worker do
 
     new_state = %{state | nodes: old_nodes ++ new_nodes}
 
-    if search_completed?(new_state.nodes, new_state.target) do
+    if search_completed?(new_state.nodes, new_state.hashed_target) do
       state.callback.(nil, :not_found)
       wind_down(new_state)
     else
@@ -194,7 +195,7 @@ defmodule CrissCrossDHT.SearchValue.Worker do
 
   def send_announce_msg(cluster_header, %{cypher: cypher}, state) do
     state.nodes
-    |> Distance.closest_nodes(state.target, 7)
+    |> Distance.closest_nodes(state.hashed_target, 7)
     |> Enum.filter(fn node -> node.responded == true end)
     |> Enum.each(fn node ->
       Logger.debug("[#{Utils.encode_human(node.id)}] << announce_peer")
@@ -242,7 +243,7 @@ defmodule CrissCrossDHT.SearchValue.Worker do
   defp nodes_to_search_nodes(nodes) do
     Enum.map(nodes, fn node ->
       {id, ip, port} = extract_node_infos(node)
-      %Node{id: id, ip: ip, port: port}
+      %Node{id: id, hashed_id: Utils.simple_hash(id), ip: ip, port: port}
     end)
   end
 

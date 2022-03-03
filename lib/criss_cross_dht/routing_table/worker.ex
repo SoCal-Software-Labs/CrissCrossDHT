@@ -44,6 +44,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
 
     init_args = [
       node_id: :crypto.hash(:blake2s, opts[:node_id]),
+      node_id_enc: opts[:node_id_enc],
       original_node_id: opts[:node_id],
       ip_tuple: opts[:ip_tuple],
       cluster: opts[:cluster],
@@ -76,7 +77,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   end
 
   def get(name, node_id) do
-    node_id = :crypto.hash(:blake2s, node_id)
+    node_id = Utils.simple_hash(node_id)
     GenServer.call(name, {:get, node_id})
   end
 
@@ -85,20 +86,20 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   end
 
   def closest_nodes(name, target, remote_node_id) do
-    target = :crypto.hash(:blake2s, target)
-    remote_node_id = :crypto.hash(:blake2s, remote_node_id)
+    target = Utils.simple_hash(target)
+    remote_node_id = Utils.simple_hash(remote_node_id)
     GenServer.call(name, {:closest_nodes, target, remote_node_id})
   end
 
   def closest_nodes(nil, _target), do: []
 
   def closest_nodes(name, target) do
-    target = :crypto.hash(:blake2s, target)
+    target = Utils.simple_hash(target)
     GenServer.call(name, {:closest_nodes, target, nil})
   end
 
   def del(name, node_id) do
-    node_id = :crypto.hash(:blake2s, node_id)
+    node_id = Utils.simple_hash(node_id)
     GenServer.call(name, {:del, node_id})
   end
 
@@ -108,6 +109,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
 
   def init(
         node_id: node_id,
+        node_id_enc: node_id_enc,
         original_node_id: original_node_id,
         ip_tuple: ip_tuple,
         cluster: cluster,
@@ -139,7 +141,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
      %{
        node_id: node_id,
        original_node_id: original_node_id,
-       node_id_enc: Utils.encode_human(original_node_id),
+       node_id_enc: node_id_enc,
        rt_name: rt_name,
        buckets: [Bucket.new(0)],
        cache: :ets.new(ets_name, [:set, :protected]),
@@ -385,6 +387,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
           :find_node,
           socket,
           state.node_id,
+          state.node_id_enc,
           state.ip_tuple,
           state.cluster_secret
         )

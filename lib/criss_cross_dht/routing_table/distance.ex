@@ -13,7 +13,7 @@ defmodule CrissCrossDHT.RoutingTable.Distance do
 
   def closest_nodes(nodes, target) do
     Enum.sort(nodes, fn x, y ->
-      xor_cmp(x.id, y.id, target, &(&1 < &2))
+      xor_cmp(x.hashed_id, y.hashed_id, target, &(&1 < &2))
     end)
   end
 

@@ -88,6 +88,8 @@ defmodule CrissCrossDHT.Server.Utils do
     end
   end
 
+  def simple_hash(s), do: :crypto.hash(:blake2s, s)
+
   @doc """
   TODO
   """
