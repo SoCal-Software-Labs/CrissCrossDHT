@@ -38,7 +38,7 @@ defmodule CrissCrossDHT.Server.Utils do
   end
 
   def resolve_hostnames([{id, host, port} | tail], inet, result) when is_binary(host) do
-    case :inet.getaddr(String.to_charlist(host), :inet) do
+    case :inet.getaddr(String.to_charlist(host), inet) do
       {:ok, ip_addr} ->
         resolve_hostnames(tail, inet, result ++ [{id, ip_addr, port}])
 
