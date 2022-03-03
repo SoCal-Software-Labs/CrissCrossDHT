@@ -1749,7 +1749,7 @@ defmodule CrissCrossDHT.Server.Worker do
     ## Get the nodes which are defined as bootstrapping nodes in the config
     nodes =
       Utils.config(state.config, :bootstrap_nodes)
-      |> Utils.resolve_hostnames(inet)
+      |> Utils.resolve_hostnames(:inet6)
 
     Logger.debug("nodes: #{inspect(nodes)}")
 
