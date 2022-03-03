@@ -165,7 +165,17 @@ defmodule CrissCrossDHT.Server.Worker do
   def create_udp_socket(ip_addr, port, dispatcher) do
     case UDPQuic.open(ip_addr, port, dispatcher) do
       {:ok, socket, bind_addr} ->
-        [l, r] = String.split(bind_addr, ":")
+        {l, r} =
+          case bind_addr do
+            "[" <> rest ->
+              [l, r] = String.split(rest, "]:", parts: 2)
+              {l, r}
+
+            _ ->
+              [l, r] = String.split(bind_addr, ":", parts: 2)
+              {l, r}
+          end
+
         {:ok, addr} = :inet.parse_address(String.to_charlist(l))
 
         {socket, addr, String.to_integer(r)}
