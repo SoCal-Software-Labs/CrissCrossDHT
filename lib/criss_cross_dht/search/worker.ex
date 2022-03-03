@@ -103,7 +103,6 @@ defmodule CrissCrossDHT.Search.Worker do
       ## Send queries to the 3 closest nodes
       new_state =
         state.nodes
-        |> nodesinspector()
         |> Distance.closest_nodes(state.hashed_target)
         |> Enum.filter(fn x ->
           x.responded == false and
@@ -111,18 +110,12 @@ defmodule CrissCrossDHT.Search.Worker do
             Node.last_time_requested(x) > 5
         end)
         |> Enum.slice(0..2)
-        |> nodesinspector()
         |> send_queries(cluster_info, state)
 
       Process.send_after(self(), {:search_iterate, cluster_info}, 500)
 
       {:noreply, new_state}
     end
-  end
-
-  def nodesinspector(nodes) do
-    # Logger.error("#{inspect(nodes)}")
-    nodes
   end
 
   def handle_call(:stop, _from, state) do
@@ -176,23 +169,9 @@ defmodule CrissCrossDHT.Search.Worker do
     {:noreply, %{state | nodes: old_nodes}}
   end
 
-  def handle_cast({:handle_reply, remote, nodes}, state) do
+  def handle_cast({:handle_nodes_reply, remote, nodes}, state) do
     old_nodes = update_responded_node(state.nodes, remote)
-
-    new_nodes =
-      Enum.flat_map(nodes, fn
-        {id, ip, port} ->
-          if Enum.find(state.nodes, fn x -> x.id == id end) == nil and
-               {ip, port} != state.ip_tuple and state.node_id != id do
-            [%Node{id: id, hashed_id: Utils.simple_hash(id), ip: ip, port: port}]
-          else
-            []
-          end
-
-        other ->
-          Logger.warn("Remote node sent invalid node reply #{inspect(other)}")
-          []
-      end)
+    new_nodes = compute_new_nodes(nodes, old_nodes, state.ip_tuple, state.node_id)
 
     {:noreply, %{state | nodes: old_nodes ++ new_nodes}}
   end
@@ -255,10 +234,7 @@ defmodule CrissCrossDHT.Search.Worker do
   end
 
   def nodes_to_search_nodes(nodes) do
-    Enum.map(nodes, fn node ->
-      {id, ip, port} = extract_node_infos(node)
-      %Node{id: id, hashed_id: Utils.simple_hash(id), ip: ip, port: port}
-    end)
+    Enum.flat_map(nodes, &extract_node_infos/1)
   end
 
   defp gen_request_msg(:find_node, state) do
@@ -275,7 +251,7 @@ defmodule CrissCrossDHT.Search.Worker do
   ## responded. This function goes through the node list and sets :responded of
   ## the responded node to true. If the reply from the remote node also contains
   ## a token this function updates this too.
-  defp update_responded_node(nodes, remote) do
+  def update_responded_node(nodes, remote) do
     node_list = update_nodes(nodes, remote.node_id, :responded)
 
     if Map.has_key?(remote, :token) do
@@ -286,11 +262,11 @@ defmodule CrissCrossDHT.Search.Worker do
   end
 
   ## This function is a helper function to update the node list easily.
-  defp update_nodes(nodes, node_id, key) do
+  def update_nodes(nodes, node_id, key) do
     update_nodes(nodes, node_id, key, fn _ -> true end)
   end
 
-  defp update_nodes(nodes, node_id, key, func) do
+  def update_nodes(nodes, node_id, key, func) do
     Enum.map(nodes, fn node ->
       if node.id == node_id do
         Map.put(node, key, func.(node))
@@ -300,14 +276,35 @@ defmodule CrissCrossDHT.Search.Worker do
     end)
   end
 
-  defp extract_node_infos(node) when is_tuple(node), do: node
+  def extract_node_infos({id, ip, port}),
+    do: [%Node{id: id, hashed_id: Utils.simple_hash(id), ip: ip, port: port}]
 
-  defp extract_node_infos(node) when is_pid(node) do
-    CrissCrossDHT.RoutingTable.Node.to_tuple(node)
+  def extract_node_infos(node) when is_pid(node) do
+    if Process.alive?(node) do
+      {id, ip, port} = CrissCrossDHT.RoutingTable.Node.to_tuple(node)
+      [%Node{id: id, hashed_id: Utils.simple_hash(id), ip: ip, port: port}]
+    else
+      []
+    end
+  end
+
+  def compute_new_nodes(nodes, old_nodes, node_id, _ip_tuple) do
+    Enum.flat_map(nodes, fn
+      {id, ip, port} ->
+        if Enum.find(old_nodes, fn x -> x.id == id end) == nil and node_id != id do
+          [%Node{id: id, hashed_id: Utils.simple_hash(id), ip: ip, port: port}]
+        else
+          []
+        end
+
+      other ->
+        Logger.warn("Remote node sent invalid node reply #{inspect(other)}")
+        []
+    end)
   end
 
   ## This function contains the condition when a search is completed.
-  defp search_completed?(nodes, target) do
+  def search_completed?(nodes, target) do
     nodes
     |> Distance.closest_nodes(target, 7)
     |> Enum.all?(fn node ->
@@ -315,7 +312,7 @@ defmodule CrissCrossDHT.Search.Worker do
     end)
   end
 
-  defp get_cluster_info(cluster_header, %{cluster_config: cluster_config}) do
+  def get_cluster_info(cluster_header, %{cluster_config: cluster_config}) do
     case cluster_config do
       nil -> nil
       _ -> {cluster_header, cluster_config}

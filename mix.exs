@@ -23,7 +23,7 @@ defmodule CrissCrossDHT.Mixfile do
   defp deps do
     [
       {:b58, "~> 1.0.2"},
-      {:ex_schnorr, "~> 0.1.0"},
+      {:ex_schnorr, "~> 0.1.1"},
       {:ex_doc, "~> 0.19", only: :dev},
       {:pretty_hex, "~> 0.0.1", only: :dev},
       {:dialyxir, "~> 0.5.1", only: [:dev, :test]},

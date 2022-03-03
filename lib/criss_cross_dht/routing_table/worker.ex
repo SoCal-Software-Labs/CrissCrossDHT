@@ -415,7 +415,8 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
       ## If the bucket has still some space left, we can just add the node to
       ## the bucket. Easy Peasy
       Bucket.has_space?(bucket) ->
-        node_child = {Node, own_node_id: my_node_id, node_tuple: node_tuple, bucket_index: index}
+        node_child =
+          {Node, own_node_id: state.original_node_id, node_tuple: node_tuple, bucket_index: index}
 
         {:ok, pid} =
           state.node_id_enc

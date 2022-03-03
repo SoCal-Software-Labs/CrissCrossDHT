@@ -19,6 +19,16 @@ defmodule CrissCrossDHT.SearchValue.Worker do
   alias CrissCrossDHT.Search.Node
   alias CrissCrossDHT.Server.Utils
 
+  import CrissCrossDHT.Search.Worker,
+    only: [
+      nodes_to_search_nodes: 1,
+      search_completed?: 2,
+      get_cluster_info: 2,
+      compute_new_nodes: 4,
+      update_nodes: 4,
+      update_responded_node: 2
+    ]
+
   ##############
   # Client API #
   ##############
@@ -163,21 +173,7 @@ defmodule CrissCrossDHT.SearchValue.Worker do
 
   def handle_cast({:handle_nodes_reply, remote, nodes}, state) do
     old_nodes = update_responded_node(state.nodes, remote)
-
-    new_nodes =
-      Enum.flat_map(nodes, fn
-        {id, ip, port} ->
-          if Enum.find(state.nodes, fn x -> x.id == id end) == nil and
-               {ip, port} != state.ip_tuple and state.node_id != id do
-            [%Node{id: id, hashed_id: Utils.simple_hash(id), ip: ip, port: port}]
-          else
-            []
-          end
-
-        other ->
-          Logger.warn("Remote node sent invalid node reply #{inspect(other)}")
-          []
-      end)
+    new_nodes = compute_new_nodes(nodes, old_nodes, state.ip_tuple, state.node_id)
 
     new_state = %{state | nodes: old_nodes ++ new_nodes}
 
@@ -192,22 +188,6 @@ defmodule CrissCrossDHT.SearchValue.Worker do
   #####################
   # Private Functions #
   #####################
-
-  def send_announce_msg(cluster_header, %{cypher: cypher}, state) do
-    state.nodes
-    |> Distance.closest_nodes(state.hashed_target, 7)
-    |> Enum.filter(fn node -> node.responded == true end)
-    |> Enum.each(fn node ->
-      Logger.debug("[#{Utils.encode_human(node.id)}] << announce_peer")
-
-      args = [node_id: state.node_id, info_hash: state.target, token: node.token, port: node.port]
-      args = if state.port == 0, do: args ++ [implied_port: true], else: args
-
-      payload = KRPCProtocol.encode(:announce_peer, args)
-      payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
-      CrissCrossDHT.UDPQuic.send(state.socket, node.ip, node.port, payload)
-    end)
-  end
 
   ## This function merges args (keyword list) with the state map and returns a
   ## function depending on the type (:find_value).
@@ -240,66 +220,8 @@ defmodule CrissCrossDHT.SearchValue.Worker do
     send_queries(rest, cluster_info, %{state | nodes: new_nodes})
   end
 
-  defp nodes_to_search_nodes(nodes) do
-    Enum.map(nodes, fn node ->
-      {id, ip, port} = extract_node_infos(node)
-      %Node{id: id, hashed_id: Utils.simple_hash(id), ip: ip, port: port}
-    end)
-  end
-
   defp gen_request_msg(:find_value, state) do
     args = [tid: state.tid, node_id: state.node_id, key: state.target]
     KRPCProtocol.encode(:find_value, args)
-  end
-
-  ## It is necessary that we need to know which node in our node list has
-  ## responded. This function goes through the node list and sets :responded of
-  ## the responded node to true. If the reply from the remote node also contains
-  ## a token this function updates this too.
-  defp update_responded_node(nodes, remote) do
-    node_list = update_nodes(nodes, remote.node_id, :responded)
-
-    if Map.has_key?(remote, :token) do
-      update_nodes(node_list, remote.node_id, :token, fn _ -> remote.token end)
-    else
-      node_list
-    end
-  end
-
-  ## This function is a helper function to update the node list easily.
-  defp update_nodes(nodes, node_id, key) do
-    update_nodes(nodes, node_id, key, fn _ -> true end)
-  end
-
-  defp update_nodes(nodes, node_id, key, func) do
-    Enum.map(nodes, fn node ->
-      if node.id == node_id do
-        Map.put(node, key, func.(node))
-      else
-        node
-      end
-    end)
-  end
-
-  defp extract_node_infos(node) when is_tuple(node), do: node
-
-  defp extract_node_infos(node) when is_pid(node) do
-    CrissCrossDHT.RoutingTable.Node.to_tuple(node)
-  end
-
-  ## This function contains the condition when a search is completed.
-  defp search_completed?(nodes, target) do
-    nodes
-    |> Distance.closest_nodes(target, 7)
-    |> Enum.all?(fn node ->
-      node.responded == true or node.requested >= 3
-    end)
-  end
-
-  defp get_cluster_info(cluster_header, %{cluster_config: cluster_config}) do
-    case cluster_config do
-      nil -> nil
-      _ -> {cluster_header, cluster_config}
-    end
   end
 end

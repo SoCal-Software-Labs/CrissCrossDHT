@@ -65,6 +65,10 @@ defmodule CrissCrossDHT.Server.DHTSled do
     Agent.start_link(fn -> sled_conn end, opts)
   end
 
+  def next_time() do
+    :os.system_time(:millisecond) + @tree_reannounce + :rand.uniform(@tree_reannounce)
+  end
+
   def queue_announce(conn, cluster, infohash, ip, port, meta, ttl) do
     ttl =
       if ttl == -1 do
@@ -73,15 +77,13 @@ defmodule CrissCrossDHT.Server.DHTSled do
         ttl
       end
 
-    next_time = :os.system_time(:millisecond) + @tree_reannounce + :rand.uniform(@tree_reannounce)
-
     :ok =
       SortedSetKV.zadd(
         Agent.get(conn, fn l -> l end),
         "treeclock",
         :erlang.term_to_binary({cluster, infohash}),
         :erlang.term_to_binary({ip, port, ttl, meta}),
-        next_time,
+        next_time(),
         true
       )
   end
@@ -341,13 +343,11 @@ defmodule CrissCrossDHT.Server.DHTSled do
       SortedSetKV.zrangebyscore(conn, "nameclock", 0, :os.system_time(:millisecond), 0, 100)
 
     for bin <- infohashes do
-      now = :os.system_time(:millisecond)
-
       {cluster, name} = :erlang.binary_to_term(bin)
       key = Enum.join([cluster, name], "-")
 
       case SortedSetKV.zgetbykey(conn, "names", key, 0) do
-        b when is_binary(b) ->
+        {b, _} when is_binary(b) ->
           {value, generation, ttl, public_key, signature_cluster, signature_name} =
             :erlang.binary_to_term(b)
 
@@ -363,18 +363,18 @@ defmodule CrissCrossDHT.Server.DHTSled do
              signature_cluster, signature_name}
           )
 
-          if ttl > now do
-            refresh_name(pid, bin)
+          next = next_time()
+
+          if ttl > next do
+            SortedSetKV.zscoreupdate(conn, "nameclock", bin, next, true)
           end
 
-        _ ->
+        nil ->
           :ok
       end
     end
 
-    ret = SortedSetKV.zrembyrangebyscore(conn, "nameclock", 0, :os.system_time(:millisecond), 100)
-
-    if ret > 0 do
+    if length(infohashes) > 0 do
       reannounce_names(pid, worker_conn)
     else
       :ok
@@ -400,17 +400,21 @@ defmodule CrissCrossDHT.Server.DHTSled do
 
           GenServer.cast(
             worker_conn,
-            {:search_announce, cluster, infohash, fn _ -> :ok end, ttl, port, meta}
+            {:search_announce, cluster, infohash, fn _ -> :ok end, ttl, port, meta, false}
           )
+
+          next = next_time()
+
+          if ttl > next do
+            SortedSetKV.zscoreupdate(conn, "treeclock", bin, next, true)
+          end
 
         nil ->
           :ok
       end
     end
 
-    ret = SortedSetKV.zrembyrangebyscore(conn, "treeclock", 0, :os.system_time(:millisecond), 100)
-
-    if ret > 0 do
+    if length(infohashes) > 0 do
       reannounce_names(pid, worker_conn)
     else
       :ok

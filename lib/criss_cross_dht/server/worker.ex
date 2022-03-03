@@ -66,7 +66,7 @@ defmodule CrissCrossDHT.Server.Worker do
 
   def search_announce(pid, cluster, infohash, port, meta, ttl, callback) do
     ttl = Utils.adjust_ttl(ttl)
-    GenServer.cast(pid, {:search_announce, cluster, infohash, callback, ttl, port, meta})
+    GenServer.cast(pid, {:search_announce, cluster, infohash, callback, ttl, port, meta, true})
   end
 
   def cluster_announce(pid, cluster, infohash, ttl) do
@@ -458,9 +458,10 @@ defmodule CrissCrossDHT.Server.Worker do
     {:noreply, state}
   end
 
-  def handle_cast({:search_announce, cluster, infohash, callback, ttl, port, meta}, state) do
-    Cachex.put!(:search_limit, {cluster, infohash}, true, ttl: @search_limit_ttl)
-
+  def handle_cast(
+        {:search_announce, cluster, infohash, callback, ttl, port, meta, queue_announce},
+        state
+      ) do
     nodes =
       state.node_id_enc
       |> get_rtable(cluster, :ipv4)
@@ -499,15 +500,17 @@ defmodule CrissCrossDHT.Server.Worker do
       ttl
     )
 
-    state.storage_mod.queue_announce(
-      state.storage_pid,
-      cluster,
-      infohash,
-      ip,
-      port,
-      meta,
-      ttl
-    )
+    if queue_announce do
+      state.storage_mod.queue_announce(
+        state.storage_pid,
+        cluster,
+        infohash,
+        ip,
+        port,
+        meta,
+        ttl
+      )
+    end
 
     get_local_nodes(state, cluster, infohash, callback)
 
@@ -632,7 +635,7 @@ defmodule CrissCrossDHT.Server.Worker do
     worker_pid = self()
 
     Task.start(fn ->
-      bootstrap(state, {state.socket, :inet})
+      bootstrap(state, {state.socket, :inet6})
 
       for {cluster_header, _} <-
             Map.delete(state.cluster_mod.get_clusters(), state.bootstrap_overlay) do
@@ -1749,7 +1752,7 @@ defmodule CrissCrossDHT.Server.Worker do
     ## Get the nodes which are defined as bootstrapping nodes in the config
     nodes =
       Utils.config(state.config, :bootstrap_nodes)
-      |> Utils.resolve_hostnames(:inet6)
+      |> Utils.resolve_hostnames(inet)
 
     Logger.debug("nodes: #{inspect(nodes)}")
 
