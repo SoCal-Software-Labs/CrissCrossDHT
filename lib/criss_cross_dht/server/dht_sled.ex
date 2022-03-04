@@ -70,13 +70,6 @@ defmodule CrissCrossDHT.Server.DHTSled do
   end
 
   def queue_announce(conn, cluster, infohash, ip, port, meta, ttl) do
-    ttl =
-      if ttl == -1 do
-        18_446_744_073_709_551_615
-      else
-        ttl
-      end
-
     :ok =
       SortedSetKV.zadd(
         Agent.get(conn, fn l -> l end),
@@ -365,8 +358,10 @@ defmodule CrissCrossDHT.Server.DHTSled do
 
           next = next_time()
 
-          if ttl > next do
+          if ttl == -1 or ttl > next do
             SortedSetKV.zscoreupdate(conn, "nameclock", bin, next, true)
+          else
+            SortedSetKV.zrem(conn, "nameclock", bin)
           end
 
         nil ->
@@ -405,8 +400,10 @@ defmodule CrissCrossDHT.Server.DHTSled do
 
           next = next_time()
 
-          if ttl > next do
+          if ttl == -1 or ttl > next do
             SortedSetKV.zscoreupdate(conn, "treeclock", bin, next, true)
+          else
+            SortedSetKV.zrem(conn, "treeclock", bin)
           end
 
         nil ->
