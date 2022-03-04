@@ -169,7 +169,7 @@ defmodule CrissCrossDHT.Search.Worker do
     {:noreply, %{state | nodes: old_nodes}}
   end
 
-  def handle_cast({:handle_nodes_reply, remote, nodes}, state) do
+  def handle_cast({:handle_reply, remote, nodes}, state) do
     old_nodes = update_responded_node(state.nodes, remote)
     new_nodes = compute_new_nodes(nodes, old_nodes, state.ip_tuple, state.node_id)
 
