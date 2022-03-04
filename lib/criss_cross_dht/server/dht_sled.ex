@@ -117,6 +117,14 @@ defmodule CrissCrossDHT.Server.DHTSled do
 
   def put(conn, cluster, infohash, ip, port, meta, ttl) do
     bin = :erlang.term_to_binary({ip, port})
+
+    ttl =
+      if ttl == -1 do
+        18_446_744_073_709_551_615
+      else
+        ttl
+      end
+
     ttl = min(:os.system_time(:millisecond) + @max_announce_broadcast_ttl, ttl)
 
     :ok =

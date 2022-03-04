@@ -545,15 +545,31 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   """
   def get_node(cache, node_id) do
     case :ets.lookup(cache, node_id) do
-      [{_node_id, pid} | _] -> pid
-      [] -> nil
+      [{_node_id, pid} | _] ->
+        if Process.alive?(pid) do
+          pid
+        else
+          :ets.delete(cache, node_id)
+          nil
+        end
+
+      [] ->
+        nil
     end
   end
 
   def get_node_ip(cache_ip, ip_tuple) do
     case :ets.lookup(cache_ip, ip_tuple) do
-      [{_node_id, pid} | _] -> pid
-      [] -> nil
+      [{_node_id, pid} | _] ->
+        if Process.alive?(pid) do
+          pid
+        else
+          :ets.delete(cache_ip, ip_tuple)
+          nil
+        end
+
+      [] ->
+        nil
     end
   end
 end
