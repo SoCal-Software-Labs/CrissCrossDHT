@@ -327,7 +327,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
         {:noreply, state}
 
       # We have this node already in our table
-      node_exists?(state.cache, node_id) ->
+      node_exists?(state.cache, Utils.simple_hash(node_id)) ->
         {:noreply, state}
 
       true ->
