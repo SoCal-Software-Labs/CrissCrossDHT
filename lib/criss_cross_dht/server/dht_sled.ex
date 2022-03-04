@@ -124,7 +124,7 @@ defmodule CrissCrossDHT.Server.DHTSled do
 
   def put(conn, cluster, infohash, ip, port, meta, ttl) do
     bin = :erlang.term_to_binary({ip, port})
-    ttl = min(@max_announce_broadcast_ttl, ttl)
+    ttl = min(:os.system_time(:millisecond) + @max_announce_broadcast_ttl, ttl)
 
     :ok =
       SortedSetKV.zadd(
