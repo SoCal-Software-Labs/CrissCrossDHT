@@ -21,6 +21,10 @@ defmodule CrissCrossDHT.RoutingTable.Node do
     GenServer.call(pid, :id)
   end
 
+  def hashed_id(pid) do
+    GenServer.call(pid, :hashed_id)
+  end
+
   def socket(pid) do
     GenServer.call(pid, :socket)
   end
@@ -95,6 +99,7 @@ defmodule CrissCrossDHT.RoutingTable.Node do
        :own_node_id => opts[:own_node_id],
        :bucket_index => opts[:bucket_index],
        :node_id => node_id,
+       :hashed_node_id => Utils.simple_hash(node_id),
        :ip => ip,
        :port => port,
        :socket => socket,
@@ -113,6 +118,10 @@ defmodule CrissCrossDHT.RoutingTable.Node do
 
   def handle_call(:id, _from, state) do
     {:reply, state.node_id, state}
+  end
+
+  def handle_call(:hashed_id, _from, state) do
+    {:reply, state.hashed_node_id, state}
   end
 
   def handle_call(:bucket_index, _from, state) do

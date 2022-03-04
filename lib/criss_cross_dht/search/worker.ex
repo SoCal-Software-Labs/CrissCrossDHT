@@ -181,6 +181,8 @@ defmodule CrissCrossDHT.Search.Worker do
   #####################
 
   def send_announce_msg(cluster_header, %{cypher: cypher}, state) do
+    IO.inspect({:announce, state.nodes})
+
     state.nodes
     |> Distance.closest_nodes(state.hashed_target, 7)
     |> Enum.filter(fn node -> node.responded == true end)

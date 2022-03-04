@@ -56,7 +56,6 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   end
 
   def add(name, remote_node_id, address, socket) do
-    remote_node_id = :crypto.hash(:blake2s, remote_node_id)
     GenServer.cast(name, {:add, remote_node_id, address, socket})
   end
 
@@ -324,7 +323,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   def handle_cast({:add, node_id, address, socket}, state) do
     cond do
       # This is our own node id
-      node_id == state.node_id or address == state.ip_tuple ->
+      node_id == state.node_id ->
         {:noreply, state}
 
       # We have this node already in our table
@@ -408,7 +407,9 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
 
     my_node_id = state.node_id
     buckets = state.buckets
-    index = find_bucket_index(buckets, my_node_id, node_id)
+    hashed_id = Utils.simple_hash(node_id)
+
+    index = find_bucket_index(buckets, my_node_id, hashed_id)
     bucket = Enum.at(buckets, index)
 
     cond do
@@ -427,7 +428,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
           |> DynamicSupervisor.start_child(node_child)
 
         new_bucket = Bucket.add(bucket, pid)
-        :ets.insert(state.cache, {node_id, pid})
+        :ets.insert(state.cache, {hashed_id, pid})
         :ets.insert(state.cache_ip, {ip_port, pid})
         state |> Map.put(:buckets, List.replace_at(buckets, index, new_bucket))
 
@@ -455,7 +456,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
 
   def reorganize([node | rest], buckets, my_node_id) do
     current_index = length(buckets) - 2
-    index = find_bucket_index(buckets, my_node_id, Node.id(node))
+    index = find_bucket_index(buckets, my_node_id, Node.hashed_id(node))
 
     new_buckets =
       if current_index != index do
@@ -463,7 +464,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
         new_bucket = Enum.at(buckets, index)
 
         ## Remove the node from the current bucket
-        filtered_bucket = Bucket.del(current_bucket, Node.id(node))
+        filtered_bucket = Bucket.del(current_bucket, Node.hashed_id(node))
 
         ## Change bucket index in the Node to the new one
         Node.bucket_index(node, index)
