@@ -386,7 +386,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
           |> CrissCrossDHT.Search.Supervisor.start_child(
             :find_node,
             socket,
-            state.node_id,
+            state.original_node_id,
             state.node_id_enc,
             state.ip_tuple,
             state.cluster_secret

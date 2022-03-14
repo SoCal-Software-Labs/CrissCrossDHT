@@ -497,33 +497,39 @@ defmodule CrissCrossDHT.Server.Worker do
       ttl: ttl
     )
 
-    {ip, _port} = state.ip_tuple
+    case state.socket do
+      {:client, _, _} ->
+        Logger.warning("Cannot announce as client")
 
-    state.storage_mod.put(
-      state.storage_pid,
-      cluster,
-      infohash,
-      ip,
-      port,
-      meta,
-      ttl
-    )
+      _ ->
+        {ip, _port} = state.ip_tuple
 
-    if queue_announce do
-      state.storage_mod.queue_announce(
-        state.storage_pid,
-        cluster,
-        infohash,
-        ip,
-        port,
-        meta,
-        ttl
-      )
+        state.storage_mod.put(
+          state.storage_pid,
+          cluster,
+          infohash,
+          ip,
+          port,
+          meta,
+          ttl
+        )
+
+        if queue_announce do
+          state.storage_mod.queue_announce(
+            state.storage_pid,
+            cluster,
+            infohash,
+            ip,
+            port,
+            meta,
+            ttl
+          )
+        end
+
+        get_local_nodes(state, cluster, infohash, callback)
+
+        :ok = state.storage_mod.cluster_announce(state.storage_pid, cluster, infohash, ttl)
     end
-
-    get_local_nodes(state, cluster, infohash, callback)
-
-    :ok = state.storage_mod.cluster_announce(state.storage_pid, cluster, infohash, ttl)
 
     {:noreply, state}
   end
