@@ -33,7 +33,7 @@ defmodule CrissCrossDHT.Mixfile do
       {:cachex, "~> 3.4.0"},
       # {:ex_p2p, path: "../ex_p2p"},
       {:ex_p2p,
-       github: "SoCal-Software-Labs/ExP2P", ref: "3db87ad2206ad8c4327ba84cdb1c3d9f189a4097"},
+       github: "SoCal-Software-Labs/ExP2P", ref: "2104c37904e89f32ea84418fd002d19efe4c4bfb"},
       {:yaml_elixir, "~> 2.8"},
       {:file_system, "~> 0.2.10"}
     ]

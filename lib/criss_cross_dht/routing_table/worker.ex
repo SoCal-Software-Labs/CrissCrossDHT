@@ -235,7 +235,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
       |> Enum.sort(fn x, y ->
         Distance.xor_cmp(elem(x, 0), elem(y, 0), target, &(&1 < &2))
       end)
-      |> Enum.map(fn x -> elem(x, 1) end)
+      |> Enum.map(fn x -> elem(elem(x, 1), 0) end)
       |> Enum.slice(0..7)
 
     {:reply, list, state}
@@ -375,22 +375,27 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
 
   def find_node_on_random_node(target, state) do
     case random_node(state.cache) do
-      node_pid when is_pid(node_pid) ->
-        node = Node.to_tuple(node_pid)
-        socket = Node.socket(node_pid)
+      {node_id, {node_pid, _}} when is_pid(node_pid) ->
+        if Process.alive?(node_pid) do
+          node = Node.to_tuple(node_pid)
+          socket = Node.socket(node_pid)
 
-        ## Start find_node search
-        state.node_id_enc
-        |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.Search.Supervisor)
-        |> CrissCrossDHT.Search.Supervisor.start_child(
-          :find_node,
-          socket,
-          state.node_id,
-          state.node_id_enc,
-          state.ip_tuple,
-          state.cluster_secret
-        )
-        |> Search.find_node(state.cluster, target: target, start_nodes: [node])
+          ## Start find_node search
+          state.node_id_enc
+          |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.Search.Supervisor)
+          |> CrissCrossDHT.Search.Supervisor.start_child(
+            :find_node,
+            socket,
+            state.node_id,
+            state.node_id_enc,
+            state.ip_tuple,
+            state.cluster_secret
+          )
+          |> Search.find_node(state.cluster, target: target, start_nodes: [node])
+        else
+          new_bucket = del_node(state.cache, state.cache_ip, state.buckets, node_id)
+          find_node_on_random_node(target, %{state | buckets: new_bucket})
+        end
 
       nil ->
         Logger.warn(
@@ -428,7 +433,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
           |> DynamicSupervisor.start_child(node_child)
 
         new_bucket = Bucket.add(bucket, pid)
-        :ets.insert(state.cache, {hashed_id, pid})
+        :ets.insert(state.cache, {hashed_id, {pid, ip_port}})
         :ets.insert(state.cache_ip, {ip_port, pid})
         state |> Map.put(:buckets, List.replace_at(buckets, index, new_bucket))
 
@@ -484,7 +489,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   returns nil.
   """
   def random_node(cache) do
-    cache |> :ets.tab2list() |> Enum.random() |> elem(1)
+    cache |> :ets.tab2list() |> Enum.random()
   rescue
     _e in Enum.EmptyError -> nil
   end
@@ -521,7 +526,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   TODO
   """
   def del_node(cache, cache_ip, buckets, node_id) do
-    {_id, node_pid} = :ets.lookup(cache, node_id) |> Enum.at(0)
+    {_id, {node_pid, ip_tuple}} = :ets.lookup(cache, node_id) |> Enum.at(0)
 
     ## Delete node from the bucket list
     new_buckets =
@@ -529,13 +534,12 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
         Bucket.del(bucket, node_id)
       end)
 
-    ## Stop the node
-    Node.stop(node_pid)
-
     ## Delete node from the ETS cache
     :ets.delete(cache, node_id)
-    {_, ip, port} = Node.to_tuple(node_pid)
-    :ets.delete(cache_ip, {ip, port})
+
+    ## Stop the node
+    Node.stop(node_pid)
+    :ets.delete(cache_ip, ip_tuple)
 
     new_buckets
   end
@@ -545,7 +549,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
   """
   def get_node(cache, node_id) do
     case :ets.lookup(cache, node_id) do
-      [{_node_id, pid} | _] ->
+      [{_node_id, {pid, _}} | _] ->
         if Process.alive?(pid) do
           pid
         else

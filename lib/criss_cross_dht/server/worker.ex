@@ -162,7 +162,7 @@ defmodule CrissCrossDHT.Server.Worker do
     {name, tid}
   end
 
-  def create_udp_socket(ip_addr, port, dispatcher) do
+  def create_udp_socket(ip_addr, port, dispatcher, client_mode, server_pid) do
     case UDPQuic.open(ip_addr, port, dispatcher) do
       {:ok, socket, bind_addr} ->
         {l, r} =
@@ -178,6 +178,13 @@ defmodule CrissCrossDHT.Server.Worker do
 
         {:ok, addr} = :inet.parse_address(String.to_charlist(l))
 
+        socket =
+          if client_mode do
+            {:client, server_pid, socket}
+          else
+            socket
+          end
+
         {socket, addr, String.to_integer(r)}
 
       {:error, reason} ->
@@ -192,8 +199,10 @@ defmodule CrissCrossDHT.Server.Worker do
     dispatcher = Utils.config(config, :dispatcher)
     {storage_mod, _} = Utils.config(config, :storage)
     process_values_callback = Utils.config(config, :process_values_callback)
+    client_mode = Utils.config(config, :client_mode, false)
 
-    {socket, external_ip, socket_port} = create_udp_socket(cfg_ip, cfg_port, dispatcher)
+    {socket, external_ip, socket_port} =
+      create_udp_socket(cfg_ip, cfg_port, dispatcher, client_mode, self())
 
     Process.send_after(self(), :cluster_secret, @time_cluster_secret)
     Process.send_after(self(), :reannounce, @reannounce_interval)
@@ -561,7 +570,17 @@ defmodule CrissCrossDHT.Server.Worker do
     {:noreply, %{state | old_secret: state.secret, secret: Utils.gen_secret()}}
   end
 
-  def handle_info({:udp, socket, ip, port, raw_data}, state) do
+  def handle_info({:message_reply, from, reply}, state) do
+    {addr, port} = Utils.parse_conn_string(from)
+    handle_info({:incoming, state.socket, addr, port, reply}, state)
+  end
+
+  def handle_info({:error, err}, state) do
+    Logger.debug("Message send error #{inspect(err)}")
+    {:noreply, state}
+  end
+
+  def handle_info({:incoming, socket, ip, port, raw_data}, state) do
     if {ip, port} != state.ip_tuple do
       Task.start(fn ->
         {cluster_header, body} =
@@ -656,7 +675,7 @@ defmodule CrissCrossDHT.Server.Worker do
                 send(pid, {ref, :done})
 
               {ip, port, _meta, _ttl} = node ->
-                if state.ip_tuple != {ip, port} do
+                if state.ip_tuple != {ip, port} and port != nil do
                   send(pid, {ref, node})
                 end
             end
@@ -684,17 +703,23 @@ defmodule CrissCrossDHT.Server.Worker do
               ttl: ttl
             )
 
-            {ip, port} = state.ip_tuple
+            case state.socket do
+              {:client, _, _} ->
+                :ok
 
-            state.storage_mod.put(
-              state.storage_pid,
-              state.bootstrap_overlay,
-              cluster_header,
-              ip,
-              port,
-              nil,
-              ttl
-            )
+              _ ->
+                {ip, port} = state.ip_tuple
+
+                state.storage_mod.put(
+                  state.storage_pid,
+                  state.bootstrap_overlay,
+                  cluster_header,
+                  ip,
+                  port,
+                  nil,
+                  ttl
+                )
+            end
 
             Enum.reduce_while(1..2, [], fn _, acc ->
               receive do
@@ -716,7 +741,9 @@ defmodule CrissCrossDHT.Server.Worker do
 
         bootstrap_nodes = Task.await(task)
 
-        Logger.debug("Bootstrapping with #{inspect(bootstrap_nodes)}")
+        Logger.debug(
+          "Bootstrapping #{Utils.encode_human(cluster_header)} with #{inspect(bootstrap_nodes)}"
+        )
 
         state.node_id_enc
         |> CrissCrossDHT.Registry.get_pid(CrissCrossDHT.Search.Supervisor)
@@ -865,27 +892,7 @@ defmodule CrissCrossDHT.Server.Worker do
     )
 
     ## Get closest nodes for the requested target from the routing table
-    nodes =
-      state.node_id_enc
-      |> get_rtable(cluster_header, ip_vers)
-      |> CrissCrossDHT.RoutingTable.Worker.closest_nodes(remote.target, remote.node_id)
-      |> Enum.map(fn pid ->
-        try do
-          if Process.alive?(pid) do
-            Node.to_tuple(pid)
-          end
-        rescue
-          _e in Enum.EmptyError -> nil
-        end
-      end)
-
-    # if nodes != [] do
-    Logger.debug("[#{Utils.encode_human(remote.node_id)}] << find_node_reply")
-
-    nodes_args = if ip_vers == :ipv4, do: [nodes: nodes], else: [nodes6: nodes]
-    args = [node_id: state.node_id] ++ nodes_args ++ [tid: remote.tid]
-    Logger.debug("NODES ARGS: #{inspect(args)}")
-    payload = KRPCProtocol.encode(:find_node_reply, args)
+    payload = build_find_node_response(state, cluster_header, ip_vers, remote)
 
     # Logger.debug(PrettyHex.pretty_hex(to_string(payload)))
 
@@ -921,50 +928,7 @@ defmodule CrissCrossDHT.Server.Worker do
       {socket, ip_vers}
     )
 
-    ## Generate a token for the requesting node
-    token = Utils.hash(Utils.tuple_to_ipstr(ip, port) <> state.secret)
-
-    ## Get pid of the storage genserver
-    args =
-      if state.storage_mod.has_nodes_for_infohash?(
-           state.storage_pid,
-           cluster_header,
-           remote.info_hash
-         ) do
-        values = state.storage_mod.get_nodes(state.storage_pid, cluster_header, remote.info_hash)
-
-        [
-          node_id: state.node_id,
-          info_hash: remote.info_hash,
-          values: values,
-          tid: remote.tid,
-          token: token
-        ]
-      else
-        ## Get the closest nodes for the requested info_hash
-        rtable = state.node_id_enc |> get_rtable(cluster_header, ip_vers)
-
-        nodes =
-          Enum.map(
-            CrissCrossDHT.RoutingTable.Worker.closest_nodes(rtable, remote.info_hash),
-            fn pid ->
-              Node.to_tuple(pid)
-            end
-          )
-
-        Logger.debug("[#{Utils.encode_human(remote.node_id)}] << get_peers_reply (nodes)")
-
-        [
-          node_id: state.node_id,
-          info_hash: remote.info_hash,
-          nodes: nodes,
-          tid: remote.tid,
-          token: token
-        ]
-      end
-
-    Logger.debug("PEERS ARGS: #{inspect(args)}")
-    payload = KRPCProtocol.encode(:get_peers_reply, args)
+    payload = build_find_peers_response(state, ip, port, cluster_header, ip_vers, remote)
 
     UDPQuic.send(
       socket,
@@ -1002,15 +966,17 @@ defmodule CrissCrossDHT.Server.Worker do
       Logger.debug("Valid Token")
       Logger.debug("#{inspect(remote)}")
 
-      state.storage_mod.put(
-        state.storage_pid,
-        cluster_header,
-        remote.info_hash,
-        ip,
-        port,
-        remote.meta,
-        remote.ttl
-      )
+      if ip != nil do
+        state.storage_mod.put(
+          state.storage_pid,
+          cluster_header,
+          remote.info_hash,
+          ip,
+          port,
+          remote.meta,
+          remote.ttl
+        )
+      end
 
       ## Sending a ping_reply back as an acknowledgement
       send_ping_reply(
@@ -1412,7 +1378,9 @@ defmodule CrissCrossDHT.Server.Worker do
     payload = KRPCProtocol.encode(:ping, node_id: state.node_id)
     payload = Utils.wrap(cluster_header, Utils.encrypt(cypher, payload))
 
-    Enum.each(remote.nodes, fn node_tuple ->
+    remote.nodes
+    |> Enum.filter(fn n -> n != nil end)
+    |> Enum.each(fn node_tuple ->
       {id, ip, port} = node_tuple
 
       if id != state.node_id do
@@ -1747,6 +1715,79 @@ defmodule CrissCrossDHT.Server.Worker do
   # Private Functions #
   #####################
 
+  defp build_find_peers_response(state, ip, port, cluster_header, ip_vers, remote) do
+    ## Generate a token for the requesting node
+    token = Utils.hash(Utils.tuple_to_ipstr(ip, port) <> state.secret)
+
+    ## Get pid of the storage genserver
+    args =
+      if state.storage_mod.has_nodes_for_infohash?(
+           state.storage_pid,
+           cluster_header,
+           remote.info_hash
+         ) do
+        values = state.storage_mod.get_nodes(state.storage_pid, cluster_header, remote.info_hash)
+
+        [
+          node_id: state.node_id,
+          info_hash: remote.info_hash,
+          values: values,
+          tid: remote.tid,
+          token: token
+        ]
+      else
+        ## Get the closest nodes for the requested info_hash
+        rtable = state.node_id_enc |> get_rtable(cluster_header, ip_vers)
+
+        nodes =
+          Enum.map(
+            CrissCrossDHT.RoutingTable.Worker.closest_nodes(rtable, remote.info_hash),
+            fn pid ->
+              Node.to_tuple(pid)
+            end
+          )
+
+        Logger.debug("[#{Utils.encode_human(remote.node_id)}] << get_peers_reply (nodes)")
+
+        [
+          node_id: state.node_id,
+          info_hash: remote.info_hash,
+          nodes: nodes,
+          tid: remote.tid,
+          token: token
+        ]
+      end
+
+    Logger.debug("PEERS ARGS: #{inspect(args)}")
+    KRPCProtocol.encode(:get_peers_reply, args)
+  end
+
+  defp build_find_node_response(state, cluster_header, ip_vers, remote) do
+    nodes =
+      state.node_id_enc
+      |> get_rtable(cluster_header, ip_vers)
+      |> CrissCrossDHT.RoutingTable.Worker.closest_nodes(remote.target, remote.node_id)
+      |> Enum.flat_map(fn pid ->
+        try do
+          if Process.alive?(pid) do
+            [Node.to_tuple(pid)]
+          else
+            []
+          end
+        rescue
+          _e in Enum.EmptyError -> []
+        end
+      end)
+
+    # if nodes != [] do
+    Logger.debug("[#{Utils.encode_human(remote.node_id)}] << find_node_reply")
+
+    nodes_args = if ip_vers == :ipv4, do: [nodes: nodes], else: [nodes6: nodes]
+    args = [node_id: state.node_id] ++ nodes_args ++ [tid: remote.tid]
+    Logger.debug("NODES ARGS: #{inspect(args)}")
+    payload = KRPCProtocol.encode(:find_node_reply, args)
+  end
+
   ## This function starts a search with the bootstrapping nodes.
   defp bootstrap(state, {socket, inet}) do
     ## Get the nodes which are defined as bootstrapping nodes in the config
@@ -1783,6 +1824,16 @@ defmodule CrissCrossDHT.Server.Worker do
   end
 
   # TODO query_received and response_received are nearly identical
+  defp query_received(
+         _remote_node_id,
+         _node_id_enc,
+         _node_id,
+         {{:stream, s, _}, nil},
+         _cluster,
+         _socket
+       ) do
+    :ok
+  end
 
   defp query_received(
          remote_node_id,
@@ -1807,6 +1858,17 @@ defmodule CrissCrossDHT.Server.Worker do
         CrissCrossDHT.RoutingTable.Worker.add(rtable, remote_node_id, ip_port, socket)
       end
     end
+  end
+
+  defp response_received(
+         _remote_node_id,
+         _node_id_enc,
+         _node_id,
+         {{:stream, s, _}, nil},
+         _cluster,
+         _socket
+       ) do
+    :ok
   end
 
   defp response_received(

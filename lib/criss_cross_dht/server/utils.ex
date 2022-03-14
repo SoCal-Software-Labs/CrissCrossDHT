@@ -15,6 +15,27 @@ defmodule CrissCrossDHT.Server.Utils do
   @aad "AES256GCM"
   @schnorr_context "CrissCross-DHT"
 
+  def parse_conn_string(from) do
+    {l, r} =
+      case from do
+        "[" <> rest ->
+          [l, r] = String.split(rest, "]:", parts: 2)
+          {l, r}
+
+        _ ->
+          [l, r] = String.split(from, ":", parts: 2)
+          {l, r}
+      end
+
+    {:ok, addr} = :inet.parse_address(String.to_charlist(l))
+    port = String.to_integer(r)
+    {addr, port}
+  end
+
+  def tuple_to_ipstr({:stream, s, ipstr}, nil) do
+    ipstr
+  end
+
   def tuple_to_ipstr({oct1, oct2, oct3, oct4}, port) do
     "#{oct1}.#{oct2}.#{oct3}.#{oct4}:#{port}"
   end
