@@ -14,7 +14,9 @@ defmodule CrissCrossDHT.RoutingTable.Node do
   Stops the registry.
   """
   def stop(node_id) do
-    GenServer.call(node_id, :stop)
+    if Process.alive?(node_id) do
+      GenServer.call(node_id, :stop)
+    end
   end
 
   def id(pid) do

@@ -538,6 +538,7 @@ defmodule CrissCrossDHT.RoutingTable.Worker do
     :ets.delete(cache, node_id)
 
     ## Stop the node
+
     Node.stop(node_pid)
     :ets.delete(cache_ip, ip_tuple)
 
